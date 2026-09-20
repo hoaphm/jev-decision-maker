@@ -34,6 +34,23 @@ ships that directory: inside this repository the tool appears only after `omp pl
 one session via `-e src/decision-maker.ts`. No marketplace catalog is configured. Remove it again
 with `omp plugin uninstall jev-decision-maker`.
 
+Project scope, so this checkout always loads the plugin without touching your user profile: commit an
+`.omp/config.yml` naming the module - which this repository does:
+
+```yaml
+# .omp/config.yml
+extensions:
+  - ./src/decision-maker.ts
+```
+
+`omp plugin link . --scope project` is **not** honoured by the link command. Measured on 18.2.6 it
+reports success and writes the symlink into the user root (`~/.omp/plugins/node_modules/...`) instead,
+so either use the project config above or accept a user-scope link.
+
+Enable check: start omp in this checkout with both variables and read the status line. `◆ JEV on` means
+a call can reach the model; `◆ JEV no key` means the switch is set but the credential is not in the
+environment; `◆ JEV off` means the project config did not load.
+
 ## Enable
 
 The tool is registered only for sessions started with both variables:
@@ -63,7 +80,8 @@ the session ends. It reports what the session *can* do, never what it is *allowe
 
 omp strips ANSI from status text before rendering, so the marker is a plain glyph and any colour comes
 from the status line itself. The label refreshes on session start/switch/branch/tree and after every
-call. Print, JSON and headless runs have no UI context, so they write nothing.
+call. Print and `--mode json` runs have no UI context and write nothing; an RPC session has no terminal
+but still serialises each write as an `extension_ui_request` frame.
 
 ## Bounds
 

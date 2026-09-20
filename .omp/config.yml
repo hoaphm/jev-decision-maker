@@ -1,0 +1,7 @@
+# Project-scoped resources for this checkout. `omp plugin link --scope project` is not honoured by
+# the link command (it writes the user root), so the extension is loaded through project settings.
+# Enabling it is still per-session: JEV_DECISION_MAKER=1 plus OPENROUTER_API_KEY must be in the
+# environment, otherwise the plugin registers no tool and sends nothing; only the status line appears,
+# reading JEV off.
+extensions:
+  - ./src/decision-maker.ts

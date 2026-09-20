@@ -22,16 +22,24 @@ Package the JEV Decision Maker as a Git-installable OMP plugin without adding de
 
 ```text
 package.json                         Git-installable OMP plugin manifest
+.omp/config.yml                      Project-scoped loader for this checkout
 src/decision-maker.ts                Extension entrypoint and exported decision API
 rules/decision-maker.md              Runtime activation and authorization boundary
 README.md                            Git/local installation and security guidance
 tests/decision-maker.test.ts         HTTP boundary and lifecycle reset contract
 tests/plugin-install.test.ts         Isolated link + RPC discovery integration test
-docs/research/jev-decision-maker-correction.md
-                                    Correction that supersedes acceptance claims
+docs/research/jev-decision-maker-evidence.sha256
+                                    Hashes pinning the 12 immutable transcripts
+docs/research/jev-decision-maker.md  Report plus the dated correction section that
+                                    supersedes its acceptance claims
 ```
 
-`package.json#omp.extensions` points to `./src/decision-maker.ts`. OMP loads this extension when the package is installed or linked. Native discovery no longer loads the extension merely because OMP starts at this repository; local source development must use `omp plugin link <repo>` or explicit `-e <repo>/src/decision-maker.ts`.
+`package.json#omp.extensions` points to `./src/decision-maker.ts`, and omp loads it when the package is
+installed or linked. Native extension discovery no longer loads anything merely because omp starts in
+this repository - `<cwd>/.omp/extensions` is gone - so this checkout carries `.omp/config.yml` with
+`extensions: [./src/decision-maker.ts]`: project scope, tracked in git, no per-machine step. Measured
+caveat: `omp plugin link . --scope project` does not honour the scope on 18.2.6 - it reports success and
+writes the symlink into the user root instead.
 
 ## Runtime behavior
 
@@ -67,8 +75,9 @@ omp strips ANSI from status text before drawing, so no colour is attempted and t
 distinction. `statusLabel()` is exported and its full 8-row truth table is asserted, so the state
 machine cannot drift silently. Refresh points are `session_start`, `session_switch`, `session_branch`,
 `session_tree` and after every tool call; `session_shutdown` clears the slot because the host never
-releases one. Print/JSON/headless sessions have no UI context and write nothing, so the benchmark arms
-are unaffected. The label states capability, never authorization.
+releases one. Print and `--mode json` runs have no UI context and write nothing, so the benchmark arms
+are unaffected; an RPC session has no terminal but still serialises each write as a frame, which is how
+the automated test observes the label. The label states capability, never authorization.
 
 ## Verification
 
@@ -111,3 +120,17 @@ While the repository was private, only the `ssh://` form worked: `github:` and `
 through `api.github.com/repos/<owner>/<repo>/tarball/`, which answers `404` without credentials, and
 Bun does not consult the git credential helper on that path. For a private plugin repository, use an
 SSH spec - or `git clone` plus `omp plugin link`.
+
+## Amendments after approval
+
+Requested by the owner later in the same effort, so they supersede the matching non-goals above:
+
+- Publication: the repository was created at `github.com/hoaphm/jev-decision-maker` and switched from
+  private to public, after the transcripts were scanned for tokens, provider keys and personal data.
+- Commits: the work was committed and pushed to `main` instead of being left in the working tree.
+- Project-scope install: `.omp/config.yml` was added, and `omp plugin link . --scope project` was tried
+  first. It wrote to the user root despite the flag, so the entry was removed again with
+  `omp plugin uninstall jev-decision-maker`; `~/.omp/plugins` holds no `jev-decision-maker` symlink or
+  lock entry afterwards.
+- Status line: added on request, sized by the Q&A round (readiness only, no runtime toggle, no cost
+  counters), and it does not change what the tool sends or authorises.
