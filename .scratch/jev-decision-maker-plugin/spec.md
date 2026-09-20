@@ -43,13 +43,43 @@ The plugin rule supplies the activation boundary to installed sessions: use the 
 
 ## Evidence correction
 
-The prior 12-session JSONL, JSON, and Markdown are retained unchanged as historical data. `docs/research/jev-decision-maker-correction.md` states that the run is invalid for acceptance because the credential was obtained from an OMP secret-store command rather than provided as `OPENROUTER_API_KEY` by the user. It removes the unsupported average-tool-call claim and records that live proof is unavailable. The only accepted evidence after this change is local guard tests, fixture self-check, and isolated plugin discovery without inference.
+The prior 12-session JSONL transcripts are retained byte-for-byte and hash-pinned in
+`docs/research/jev-decision-maker-evidence.sha256`. `docs/research/jev-decision-maker.md` carries a dated
+correction section (it is annotated, not immutable, together with three added keys in the results JSON)
+recording that the run is invalid for acceptance because the credential came from an OMP secret-store
+command rather than the operator's environment, and withdrawing the unsupported average-tool-call claim.
+The only accepted evidence after this change is local guard tests, fixture self-check, and isolated
+plugin discovery without inference.
+
+## Status line
+
+The extension owns one status-line slot keyed `jev`, registered whether or not the tool is opted in, so
+the line describes the session instead of staying silent. Rendered text is `◆ <label>`:
+
+| Condition | Label |
+| --- | --- |
+| opted in, key present, tool in the active set | `JEV on` |
+| opted in, `OPENROUTER_API_KEY` missing or blank | `JEV no key` |
+| opted in with key, tool not active | `JEV inactive` |
+| not opted in | `JEV off` |
+
+omp strips ANSI from status text before drawing, so no colour is attempted and the glyph carries the
+distinction. `statusLabel()` is exported and its full 8-row truth table is asserted, so the state
+machine cannot drift silently. Refresh points are `session_start`, `session_switch`, `session_branch`,
+`session_tree` and after every tool call; `session_shutdown` clears the slot because the host never
+releases one. Print/JSON/headless sessions have no UI context and write nothing, so the benchmark arms
+are unaffected. The label states capability, never authorization.
 
 ## Verification
 
 1. `bun tests/decision-maker.test.ts` verifies all existing decision guards and that the only budget reset reasons are `start`, `switch`, `branch`, and `tree`.
 2. `bun scripts/benchmark-decision-maker.ts --self-check` verifies synthetic fixture seeds/oracles without starting OMP or inference.
 3. `bun tests/plugin-install.test.ts` creates temporary XDG data/state/cache roots, links this package, starts OMP in RPC mode, calls only `get_state`, and asserts `dumpTools` includes `decision_maker` while no `agent_start` event exists. Temporary state is removed in `finally`.
+
+4. The same `probeSession` asserts an `extension_ui_request` frame with `statusKey: "jev"` whose text ends
+   with the expected label for off / no-key / ready, and that no frame arrives after `plugin uninstall`.
+   Rendering itself was confirmed out of band in a pty-backed interactive session in the isolated HOME:
+   `◆ JEV on` with the switch set, `◆ JEV off` without it.
 
 ## Distribution
 

@@ -23,11 +23,11 @@ omp plugin link ./jev-decision-maker
 ```
 
 Verified with an empty git config, no token and no credential helper: `github:owner/repo`,
-`github:owner/repo#main`, `git+https://…#main` and `ssh://git@…` all install version 0.1.0, register
-`decision_maker` only under `JEV_DECISION_MAKER=1`, and uninstall cleanly. While this repository was
-private only the `ssh://` form worked - the others resolve through
-`api.github.com/repos/<owner>/<repo>/tarball/`, which answers `404` without credentials - so use an SSH
-spec (or a public repository) for any private plugin repo.
+`github:owner/repo#main`, `git+https://…#main` and `ssh://git@…` all install the same package build,
+register `decision_maker` only under `JEV_DECISION_MAKER=1`, and uninstall cleanly. While this
+repository was private only the `ssh://` form worked - the others resolve through
+`api.github.com/repos/<owner>/<repo>/tarball/`, which answers `404` without credentials - so use an
+SSH spec (or a public repository) for any private plugin repo.
 
 Project-native extension discovery only reads `<cwd>/.omp/extensions`, and this repository no longer
 ships that directory: inside this repository the tool appears only after `omp plugin link .`, or for
@@ -49,6 +49,22 @@ listings and transcripts. Missing or blank key answers `main` / `missing_key` wi
 Every other failure also returns control to the agent: nothing is retried, no endpoint is switched,
 and no other model is substituted.
 
+## Status line
+
+Interactive sessions get one slot on the omp status line, written under the key `jev` and cleared when
+the session ends. It reports what the session *can* do, never what it is *allowed* to do:
+
+| Label | Meaning |
+| --- | --- |
+| `◆ JEV on` | opted in, key present, tool active - a call can reach the model |
+| `◆ JEV no key` | opted in but `OPENROUTER_API_KEY` missing - every call answers `main`/`missing_key` |
+| `◆ JEV inactive` | opted in with a key, but the tool is not in this session's active tool set |
+| `◆ JEV off` | not opted in - no tool is registered and nothing is ever sent |
+
+omp strips ANSI from status text before rendering, so the marker is a plain glyph and any colour comes
+from the status line itself. The label refreshes on session start/switch/branch/tree and after every
+call. Print, JSON and headless runs have no UI context, so they write nothing.
+
 ## Bounds
 
 - One request per call, 3 s timeout, no retries, at most 5 calls per session.
@@ -65,10 +81,10 @@ and no other model is substituted.
 
 | Path | Role |
 | --- | --- |
-| `src/decision-maker.ts` | the plugin: exported `decide()` plus the `decision_maker` tool |
+| `src/decision-maker.ts` | the plugin: `decide()`, the `decision_maker` tool and the status line |
 | `rules/decision-maker.md` | usage policy distributed with the plugin |
 | `tests/decision-maker.test.ts` | boundary guards for `decide()`; no network |
-| `tests/plugin-install.test.ts` | link/uninstall proof in a throwaway HOME; starts no model turn |
+| `tests/plugin-install.test.ts` | link/uninstall and status-line proof in a throwaway HOME; no model turn |
 | `scripts/benchmark-decision-maker.ts` | 3-fixture A/B benchmark plus its inference-free self-check |
 | `docs/research/` | measurement protocol, raw results, transcripts |
 
@@ -80,10 +96,15 @@ bun tests/plugin-install.test.ts
 bun scripts/benchmark-decision-maker.ts --self-check
 ```
 
-All three run offline. The live benchmark (`bun scripts/benchmark-decision-maker.ts`) is the one
-that spends money: it runs 12 omp sessions and needs `OPENROUTER_API_KEY` in the environment.
+All three run offline and start no model turn. The live benchmark (`bun scripts/benchmark-decision-maker.ts`)
+is the one that spends money: 12 omp sessions, and it needs `OPENROUTER_API_KEY` in the environment.
 
-## Status
+The rendered status line itself was verified out of band in a real interactive session (a pty under an
+isolated HOME with the plugin linked): `◆ JEV on` with the switch set, `◆ JEV off` without it. The
+automated check covers the same labels through RPC, where omp serialises `setStatus` as an
+`extension_ui_request` frame.
+
+## Measurement status
 
 The speed-up question is unanswered. The first measured batch never called the tool — its three
 fixtures had no real branch point — and its credential handling fell outside the approved scope, so

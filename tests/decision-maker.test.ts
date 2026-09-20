@@ -12,9 +12,11 @@ import decisionMakerExtension, {
 	CALL_LIMIT,
 	DEFER_ID,
 	decide,
+	statusLabel,
 	type Candidate,
 	type DecisionInput,
 	type DecisionResult,
+	type StatusState,
 } from "../src/decision-maker.ts";
 
 const KEY = "test-openrouter-key";
@@ -88,24 +90,79 @@ type RegisteredTool = {
 	onSession?: (event: unknown) => void;
 };
 
-/** Runs the real extension factory against a registration stub so the budget lifecycle is observable. */
-function registeredTool(optIn: string | undefined): RegisteredTool | null {
-	let registered: RegisteredTool | null = null;
-	const previous = process.env.JEV_DECISION_MAKER;
-	if (optIn === undefined) delete process.env.JEV_DECISION_MAKER;
-	else process.env.JEV_DECISION_MAKER = optIn;
+type Handler = (event: unknown, ctx: unknown) => unknown;
+type Registration = { tool: RegisteredTool | null; handlers: Map<string, Handler[]> };
+
+/** Pinned because slot order on the shared status line is decided by this key. */
+const STATUS_KEY = "jev";
+const STATUS_EVENTS = ["session_start", "session_switch", "session_branch", "session_tree"];
+
+type RegistrationOptions = { optIn?: string; hasKey?: boolean; activeTools?: string[] };
+
+/**
+ * Runs the real factory against a stub and holds the environment it reads in place for the whole
+ * body: the extension samples the credential when it renders the status line, so the state under
+ * test has to survive until the handlers run.
+ */
+async function withRegistration<T>(options: RegistrationOptions, body: (registration: Registration) => Promise<T> | T): Promise<T> {
+	const handlers = new Map<string, Handler[]>();
+	let tool: RegisteredTool | null = null;
+	const previousFlag = process.env.JEV_DECISION_MAKER;
+	const previousKey = process.env.OPENROUTER_API_KEY;
+	if (options.optIn === undefined) delete process.env.JEV_DECISION_MAKER;
+	else process.env.JEV_DECISION_MAKER = options.optIn;
+	if (options.hasKey === false) delete process.env.OPENROUTER_API_KEY;
+	const stub = {
+		zod: { object: () => ({}), string: () => ({}), array: () => ({}) },
+		registerTool: (definition: RegisteredTool) => {
+			tool = definition;
+		},
+		on: (event: string, handler: Handler) => {
+			handlers.set(event, [...(handlers.get(event) ?? []), handler]);
+		},
+		getActiveTools: () => options.activeTools ?? ["read"],
+	};
 	try {
-		decisionMakerExtension({
-			zod: { object: () => ({}), string: () => ({}), array: () => ({}) },
-			registerTool: (definition: RegisteredTool) => {
-				registered = definition;
-			},
-		} as unknown as Parameters<typeof decisionMakerExtension>[0]);
+		decisionMakerExtension(stub as unknown as Parameters<typeof decisionMakerExtension>[0]);
+		return await body({ tool, handlers });
 	} finally {
-		if (previous === undefined) delete process.env.JEV_DECISION_MAKER;
-		else process.env.JEV_DECISION_MAKER = previous;
+		if (previousFlag === undefined) delete process.env.JEV_DECISION_MAKER;
+		else process.env.JEV_DECISION_MAKER = previousFlag;
+		if (previousKey === undefined) delete process.env.OPENROUTER_API_KEY;
+		else process.env.OPENROUTER_API_KEY = previousKey;
 	}
-	return registered;
+}
+
+/** A session-context stub that records status writes instead of painting a terminal. */
+function statusSink() {
+	const writes: Array<[string, string | undefined]> = [];
+	return {
+		writes,
+		ctx: { ui: { setStatus: (key: string, text: string | undefined) => void writes.push([key, text]) } },
+	};
+}
+
+/** Drives one lifecycle event and returns what the extension wrote to the status line. */
+function statusWrites(registration: Registration, event: string): Array<[string, string | undefined]> {
+	const sink = statusSink();
+	for (const handler of registration.handlers.get(event) ?? []) handler({ reason: event.slice(8) }, sink.ctx);
+	return sink.writes;
+}
+
+async function labelsFor(options: RegistrationOptions): Promise<string[]> {
+	return withRegistration(options, (registration) => {
+		const seen: string[] = [];
+		for (const event of STATUS_EVENTS) {
+			const writes = statusWrites(registration, event);
+			assert.ok(writes.length > 0, `no status write for ${event}`);
+			for (const [key, text] of writes) {
+				assert.equal(key, STATUS_KEY, `unexpected status key for ${event}`);
+				assert.ok(typeof text === "string", `status was cleared during ${event}`);
+				seen.push(text);
+			}
+		}
+		return seen;
+	});
 }
 
 const failures: string[] = [];
@@ -358,12 +415,8 @@ async function main(): Promise<void> {
 		// The per-session quota is a session contract: mid-session signals must not top it back up.
 		await test("only session-change lifecycle events reset the call budget", async () => {
 			assert.deepEqual([...BUDGET_RESET_REASONS].sort(), ["branch", "start", "switch", "tree"]);
-			assert.equal(registeredTool(undefined), null, "no tool when the switch is unset");
-			assert.equal(registeredTool("0"), null, "only exactly 1 opts in");
-			const tool = registeredTool("1");
-			assert.ok(tool, "the opted-in factory registers a tool");
-			assert.equal(tool.approval, "exec");
-			assert.equal(tool.loadMode, "essential");
+			await withRegistration({}, ({ tool }) => assert.equal(tool, null, "no tool when the switch is unset"));
+			await withRegistration({ optIn: "0" }, ({ tool }) => assert.equal(tool, null, "only exactly 1 opts in"));
 
 			const { calls, impl } = stubFetch(() =>
 				json(payload({ choice: "repair", probabilities: distribution({ repair: 0.96, rerun: 0.04 }) })),
@@ -373,29 +426,96 @@ async function main(): Promise<void> {
 			const realFetch = globalThis.fetch;
 			globalThis.fetch = impl;
 			try {
-				for (let index = 0; index < CALL_LIMIT; index += 1) {
-					const result = await tool.execute(`call-${index}`, input(), undefined, undefined, {});
-					assert.equal(result.details.reason, "selected", `call ${index + 1}`);
-				}
-				const exhausted = await tool.execute("over-limit", input(), undefined, undefined, {});
-				assert.equal(exhausted.details.reason, "call_limit");
+				await withRegistration({ optIn: "1", activeTools: ["read", "decision_maker"] }, async ({ tool }) => {
+					assert.ok(tool, "the opted-in factory registers a tool");
+					assert.equal(tool.approval, "exec");
+					assert.equal(tool.loadMode, "essential");
+					const { writes, ctx } = statusSink();
+					for (let index = 0; index < CALL_LIMIT; index += 1) {
+						const result = await tool.execute(`call-${index}`, input(), undefined, undefined, ctx);
+						assert.equal(result.details.reason, "selected", `call ${index + 1}`);
+					}
+					const exhausted = await tool.execute("over-limit", input(), undefined, undefined, ctx);
+					assert.equal(exhausted.details.reason, "call_limit");
 
-				tool.onSession?.({ reason: "todo_reminder" });
-				tool.onSession?.({ reason: "auto_retry_start" });
-				tool.onSession?.({ reason: "ttsr_triggered" });
-				tool.onSession?.({ reason: "auto_compaction_end" });
-				const stillExhausted = await tool.execute("after-signals", input(), undefined, undefined, {});
-				assert.equal(stillExhausted.details.reason, "call_limit");
-				assert.equal(calls.length, CALL_LIMIT);
+					tool.onSession?.({ reason: "todo_reminder" });
+					tool.onSession?.({ reason: "auto_retry_start" });
+					tool.onSession?.({ reason: "ttsr_triggered" });
+					tool.onSession?.({ reason: "auto_compaction_end" });
+					const stillExhausted = await tool.execute("after-signals", input(), undefined, undefined, ctx);
+					assert.equal(stillExhausted.details.reason, "call_limit");
+					assert.equal(calls.length, CALL_LIMIT);
 
-				tool.onSession?.({ reason: "switch" });
-				const afterSwitch = await tool.execute("new-session", input(), undefined, undefined, {});
-				assert.equal(afterSwitch.details.reason, "selected");
-				assert.equal(calls.length, CALL_LIMIT + 1);
+					tool.onSession?.({ reason: "switch" });
+					const afterSwitch = await tool.execute("new-session", input(), undefined, undefined, ctx);
+					assert.equal(afterSwitch.details.reason, "selected");
+					assert.equal(calls.length, CALL_LIMIT + 1);
+					// One refresh per call, so the line tracks what just happened.
+					assert.equal(writes.length, 8, JSON.stringify(writes));
+				});
 			} finally {
 				globalThis.fetch = realFetch;
 			}
 		});
+
+		await test("the status label is decided by opt-in, key and activation", () => {
+			const cases: Array<[StatusState, string]> = [
+				[{ optedIn: false, hasKey: false, toolActive: false }, "JEV off"],
+				[{ optedIn: false, hasKey: false, toolActive: true }, "JEV off"],
+				[{ optedIn: false, hasKey: true, toolActive: false }, "JEV off"],
+				[{ optedIn: false, hasKey: true, toolActive: true }, "JEV off"],
+				[{ optedIn: true, hasKey: false, toolActive: false }, "JEV no key"],
+				[{ optedIn: true, hasKey: false, toolActive: true }, "JEV no key"],
+				[{ optedIn: true, hasKey: true, toolActive: false }, "JEV inactive"],
+				[{ optedIn: true, hasKey: true, toolActive: true }, "JEV on"],
+			];
+			assert.equal(cases.length, 8, "the truth table must cover every state");
+			for (const [state, label] of cases) assert.equal(statusLabel(state), label, JSON.stringify(state));
+		});
+
+		await test("every session event reports the same readiness label", async () => {
+			const cases: Array<{ name: string; options: { optIn?: string; hasKey?: boolean; activeTools?: string[] }; label: string }> = [
+				{ name: "opted out", options: {}, label: "JEV off" },
+				{ name: "no key", options: { optIn: "1", hasKey: false }, label: "JEV no key" },
+				{ name: "not active", options: { optIn: "1", activeTools: ["read"] }, label: "JEV inactive" },
+				{ name: "ready", options: { optIn: "1", activeTools: ["read", "decision_maker"] }, label: "JEV on" },
+			];
+			for (const testCase of cases) {
+				const written = await labelsFor(testCase.options);
+				assert.equal(written.length, STATUS_EVENTS.length, testCase.name);
+				for (const text of written) {
+					assert.ok(text.endsWith(testCase.label), `${testCase.name}: "${text}" should end with "${testCase.label}"`);
+					assert.equal(text.includes("\x1b"), false, `${testCase.name}: status text must not carry ANSI`);
+					assert.equal(text.includes("\n"), false, `${testCase.name}: status text must stay on one line`);
+				}
+			}
+		});
+
+		await test("the status line exists when opted out and clears at shutdown", () =>
+			withRegistration({}, (registration) => {
+				assert.equal(registration.tool, null, "opting out must not register a tool");
+				assert.ok((registration.handlers.get("session_start") ?? []).length > 0, "no status handler registered while opted out");
+				assert.deepEqual(
+					statusWrites(registration, "session_shutdown"),
+					[[STATUS_KEY, undefined]],
+					"shutdown must clear its own status slot",
+				);
+			}),
+		);
+
+		await test("the status line is refreshed after a call returns", () =>
+			withRegistration({ optIn: "1", hasKey: false }, async ({ tool }) => {
+				assert.ok(tool, "the tool must be registered when opted in");
+				const { writes, ctx } = statusSink();
+				// No key: the call is answered locally, but the status line must still be refreshed.
+				const result = await tool.execute("call", input(), undefined, undefined, ctx);
+				assert.equal(result.details.reason, "missing_key");
+				assert.ok(
+					writes.some(([key, text]) => key === STATUS_KEY && text?.endsWith("JEV no key")),
+					`status not refreshed after execute: ${JSON.stringify(writes)}`,
+				);
+			}),
+		);
 
 		await test("missing or nonsensical cost is reported as null, never as zero", async () => {
 			for (const usage of [undefined, {}, { cost: null }, { cost: -1 }, { cost: "free" }]) {

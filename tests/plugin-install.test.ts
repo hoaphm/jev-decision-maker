@@ -25,6 +25,7 @@ const REAL_STATE_ROOTS = [
 ];
 const MANIFEST_PATH = join(REPO, "package.json");
 const RPC_DEADLINE_MS = 90_000;
+const STATUS_GRACE_MS = 1_000;
 
 // omp only honours an XDG root that already exists, so pre-create the temp ones: on a machine whose
 // real XDG layout exists, plugin state must still resolve inside this throwaway HOME.
@@ -47,10 +48,11 @@ function fingerprint(dir: string): string {
 		.join(" ");
 }
 
-function isolatedEnv(jevDecisionMaker?: string): Record<string, string> {
-	// A whitelist, not the ambient environment: no real credential can reach the child, and a
-	// placeholder key only exists to get session startup past the "no models" gate. No prompt is
-	// ever sent, so nothing can call a provider.
+function isolatedEnv(options: { jevDecisionMaker?: string; openRouterKey?: string } = {}): Record<string, string> {
+	// A whitelist, not the ambient environment: no real credential can reach the child. The
+	// placeholder model key only exists to get session startup past the "no models" gate, and the
+	// placeholder OpenRouter key only exercises the readiness label - no prompt is ever sent, so
+	// nothing can call a provider.
 	const env: Record<string, string> = {
 		HOME,
 		PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
@@ -61,15 +63,16 @@ function isolatedEnv(jevDecisionMaker?: string): Record<string, string> {
 		XDG_CACHE_HOME: join(HOME, "xdg-cache"),
 		ANTHROPIC_API_KEY: "sk-ant-not-a-real-key",
 	};
-	if (jevDecisionMaker !== undefined) env.JEV_DECISION_MAKER = jevDecisionMaker;
+	if (options.jevDecisionMaker !== undefined) env.JEV_DECISION_MAKER = options.jevDecisionMaker;
+	if (options.openRouterKey !== undefined) env.OPENROUTER_API_KEY = options.openRouterKey;
 	return env;
 }
 
 /** Runs one omp command inside the isolated HOME. */
-async function capture(argv: string[], jevDecisionMaker?: string) {
+async function capture(argv: string[], options: { jevDecisionMaker?: string; openRouterKey?: string } = {}) {
 	const proc = Bun.spawn(argv, {
 		cwd: HOME,
-		env: isolatedEnv(jevDecisionMaker),
+		env: isolatedEnv(options),
 		stdin: "ignore",
 		stdout: "pipe",
 		stderr: "pipe",
@@ -82,8 +85,14 @@ async function capture(argv: string[], jevDecisionMaker?: string) {
 	return { stdout, stderr, code };
 }
 
-/** Starts a headless RPC session, asks for the tool registry, and kills it before any turn. */
-async function registeredToolNames(jevDecisionMaker?: string): Promise<string[]> {
+type SessionProbe = { tools: string[]; statuses: Array<[string, string | undefined]> };
+
+/**
+ * Starts a headless RPC session, asks for the tool registry and records the extension's status
+ * writes, then kills the session without ever sending a prompt. RPC serialises ctx.ui.setStatus as
+ * an `extension_ui_request` frame, which is how the status line is observable with no terminal.
+ */
+async function probeSession(options: { jevDecisionMaker?: string; openRouterKey?: string } = {}): Promise<SessionProbe> {
 	const proc = Bun.spawn(
 		[
 			"omp",
@@ -98,7 +107,7 @@ async function registeredToolNames(jevDecisionMaker?: string): Promise<string[]>
 		],
 		{
 			cwd: HOME,
-			env: isolatedEnv(jevDecisionMaker),
+			env: isolatedEnv(options),
 			stdin: "pipe",
 			stdout: "pipe",
 			stderr: "pipe",
@@ -106,17 +115,32 @@ async function registeredToolNames(jevDecisionMaker?: string): Promise<string[]>
 	);
 	proc.stdin.write('{"id":"probe-1","type":"get_state"}\n');
 
-	const reader = proc.stdout.getReader();
-	const decoder = new TextDecoder();
-	let buffer = "";
+	// Pump both streams so the child can never block on a full pipe; the loop below only inspects
+	// what has already arrived, so a missing status frame cannot wedge the probe.
+	let out = "";
+	let err = "";
+	const pump = async (stream: ReadableStream, sink: (chunk: string) => void) => {
+		const decoder = new TextDecoder();
+		const reader = stream.getReader();
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) return;
+			sink(decoder.decode(value, { stream: true }));
+		}
+	};
+	const pumping = Promise.all([
+		pump(proc.stdout, (chunk) => { out += chunk; }),
+		pump(proc.stderr, (chunk) => { err += chunk; }),
+	]);
+
+	const statuses: Array<[string, string | undefined]> = [];
 	let state: Record<string, any> | undefined;
-	const deadline = performance.now() + RPC_DEADLINE_MS;
-	while (!state && performance.now() < deadline) {
-		const { done, value } = await reader.read();
-		if (done) break;
-		buffer += decoder.decode(value, { stream: true });
-		const lines = buffer.split("\n");
-		buffer = lines.pop() ?? "";
+	let consumed = 0;
+	let respondedAt = 0;
+	const takeFrames = () => {
+		const pending = out.slice(consumed);
+		const lines = pending.split("\n");
+		consumed += pending.length - (lines.pop() ?? "").length;
 		for (const line of lines) {
 			if (!line.trim().startsWith("{")) continue;
 			let frame: Record<string, any>;
@@ -126,15 +150,28 @@ async function registeredToolNames(jevDecisionMaker?: string): Promise<string[]>
 				continue;
 			}
 			if (frame.type === "response" && frame.command === "get_state" && frame.success === true) state = frame;
+			if (frame.type === "extension_ui_request" && frame.method === "setStatus") {
+				statuses.push([String(frame.statusKey), frame.statusText === undefined ? undefined : String(frame.statusText)]);
+			}
 		}
+	};
+
+	const deadline = performance.now() + RPC_DEADLINE_MS;
+	while (performance.now() < deadline) {
+		takeFrames();
+		if (state && respondedAt === 0) respondedAt = performance.now();
+		// A status frame can trail the response; give it one second, then stop.
+		if (state && (statuses.length > 0 || performance.now() - respondedAt > STATUS_GRACE_MS)) break;
+		await Bun.sleep(100);
 	}
+	takeFrames();
 	proc.kill("SIGKILL");
-	const stderr = await new Response(proc.stderr).text();
 	await proc.exited;
-	assert.ok(state, `get_state never answered; stderr: ${stderr.slice(0, 500)}`);
+	await pumping;
+	assert.ok(state, `get_state never answered; stderr: ${err.slice(0, 500)}`);
 	const dump = state?.data?.dumpTools;
 	assert.ok(Array.isArray(dump), "get_state returned no dumpTools");
-	return dump.map((tool: { name: string }) => tool.name);
+	return { tools: dump.map((tool: { name: string }) => tool.name), statuses };
 }
 
 const failures: string[] = [];
@@ -190,10 +227,41 @@ async function main(): Promise<void> {
 		});
 
 		await test("the installed plugin exposes the tool only when opted in", async () => {
-			const optedIn = await registeredToolNames("1");
-			assert.ok(optedIn.includes("decision_maker"), `missing tool; got ${optedIn.slice(0, 40).join(",")}`);
-			const optedOut = await registeredToolNames(undefined);
-			assert.equal(optedOut.includes("decision_maker"), false);
+			const optedIn = await probeSession({ jevDecisionMaker: "1", openRouterKey: "sk-or-placeholder" });
+			assert.ok(optedIn.tools.includes("decision_maker"), `missing tool; got ${optedIn.tools.slice(0, 40).join(",")}`);
+			const optedOut = await probeSession();
+			assert.equal(optedOut.tools.includes("decision_maker"), false);
+		});
+
+		await test("the README documents install paths, both variables and the labels", () => {
+			const readme = readFileSync(join(REPO, "README.md"), "utf8");
+			for (const fact of [
+				"omp plugin link",
+				"omp plugin install",
+				"JEV_DECISION_MAKER",
+				"OPENROUTER_API_KEY",
+				"◆ JEV on",
+				"JEV no key",
+				"JEV inactive",
+			]) {
+				assert.ok(readme.includes(fact), `README does not document ${fact}`);
+			}
+		});
+
+		await test("the installed plugin writes a readiness status line", async () => {
+			const cases: Array<{ name: string; options: { jevDecisionMaker?: string; openRouterKey?: string }; label: string }> = [
+				{ name: "off", options: {}, label: "JEV off" },
+				{ name: "no key", options: { jevDecisionMaker: "1" }, label: "JEV no key" },
+				{ name: "ready", options: { jevDecisionMaker: "1", openRouterKey: "sk-or-placeholder" }, label: "JEV on" },
+			];
+			for (const testCase of cases) {
+				const probe = await probeSession(testCase.options);
+				const ours = probe.statuses.filter(([key]) => key === "jev");
+				assert.ok(ours.length > 0, `${testCase.name}: no status frame; saw ${JSON.stringify(probe.statuses)}`);
+				for (const [, text] of ours) {
+					assert.ok(text?.endsWith(testCase.label), `${testCase.name}: "${text}" should end with "${testCase.label}"`);
+				}
+			}
 		});
 
 		await test("the README states both install paths and the two variables", () => {
@@ -206,8 +274,9 @@ async function main(): Promise<void> {
 		await test("omp plugin uninstall removes the installed plugin", async () => {
 			const removed = await capture(["omp", "plugin", "uninstall", "jev-decision-maker", "--json"]);
 			assert.equal(removed.code, 0, `uninstall failed: ${removed.stderr.slice(0, 500) || removed.stdout.slice(0, 500)}`);
-			const after = await registeredToolNames("1");
-			assert.equal(after.includes("decision_maker"), false, "the tool is still registered after uninstall");
+			const after = await probeSession({ jevDecisionMaker: "1" });
+			assert.equal(after.tools.includes("decision_maker"), false, "the tool is still registered after uninstall");
+			assert.equal(after.statuses.length, 0, `the uninstalled plugin still writes status: ${JSON.stringify(after.statuses)}`);
 		});
 	} finally {
 		for (const root of CANDIDATE_STATE_ROOTS) {

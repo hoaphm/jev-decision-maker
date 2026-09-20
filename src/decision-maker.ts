@@ -92,6 +92,23 @@ export const DECISION_LIMITS = {
 } as const;
 export const CANDIDATE_ID_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
 
+/** Status-line slot name; the shared line sorts slots by this key. */
+export const STATUS_KEY = "jev";
+/** omp strips ANSI from status text before rendering, so the marker is a plain glyph. */
+const STATUS_PREFIX = "◆ ";
+
+export type StatusState = { optedIn: boolean; hasKey: boolean; toolActive: boolean };
+
+/** What this session can actually do with the decision maker, as shown on the omp status line. */
+export function statusLabel(state: StatusState): string {
+	if (!state.optedIn) return "JEV off";
+	if (!state.hasKey) return "JEV no key";
+	return state.toolActive ? "JEV on" : "JEV inactive";
+}
+
+/** Registered tool name; also the entry looked for in the session's active tool set. */
+export const TOOL_NAME = "decision_maker";
+
 const CANDIDATE_KINDS: readonly CandidateKind[] = ["read", "edit", "check"];
 const MODEL_PREFIX = "typesafe/jev-";
 const PROVIDER = "TypeSafe";
@@ -363,12 +380,34 @@ const TOOL_DESCRIPTION = [
 	"Call it only at a real branch point, with candidates drawn from the current task and current permissions. Never invent options to force a call, never call it for a step that is obvious or required, never call it to authorize an action: the answer is a suggestion, not approval, and never by itself permits a destructive, networked or account-changing step.",
 ].join("\n");
 
+/** The part of the extension context this module touches. */
+type StatusWriter = { ui: { setStatus(key: string, text: string | undefined): unknown } };
+
 export default function decisionMakerExtension(pi: ExtensionAPI): void {
-	if (process.env.JEV_DECISION_MAKER !== "1") return;
+	const optedIn = process.env.JEV_DECISION_MAKER === "1";
 	const budget = { remaining: CALL_LIMIT };
+
+	// Registered even when opted out, so the line reports what the session can do rather than staying silent.
+	const refreshStatus = (ctx: StatusWriter): void => {
+		const label = statusLabel({
+			optedIn,
+			hasKey: (process.env.OPENROUTER_API_KEY ?? "").trim().length > 0,
+			toolActive: optedIn && pi.getActiveTools().includes(TOOL_NAME),
+		});
+		ctx.ui.setStatus(STATUS_KEY, STATUS_PREFIX + label);
+	};
+
+	pi.on("session_start", async (_event, ctx) => refreshStatus(ctx));
+	pi.on("session_switch", async (_event, ctx) => refreshStatus(ctx));
+	pi.on("session_branch", async (_event, ctx) => refreshStatus(ctx));
+	pi.on("session_tree", async (_event, ctx) => refreshStatus(ctx));
+	// The host never clears a slot on its own, so releasing it is this extension's job.
+	pi.on("session_shutdown", async (_event, ctx) => ctx.ui.setStatus(STATUS_KEY, undefined));
+
+	if (!optedIn) return;
 	const z = pi.zod;
 	pi.registerTool({
-		name: "decision_maker",
+		name: TOOL_NAME,
 		label: "Decision Maker",
 		description: TOOL_DESCRIPTION,
 		approval: "exec",
@@ -387,8 +426,9 @@ export default function decisionMakerExtension(pi: ExtensionAPI): void {
 				}),
 			),
 		}),
-		async execute(_toolCallId: string, params: DecisionInput, signal?: AbortSignal) {
+		async execute(_toolCallId: string, params: DecisionInput, signal?: AbortSignal, _onUpdate?: unknown, ctx?: StatusWriter) {
 			const result = await decide(params, { signal: signal ?? undefined, budget });
+			if (ctx) refreshStatus(ctx);
 			return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
 		},
 		onSession(event: unknown) {
