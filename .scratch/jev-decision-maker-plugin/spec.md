@@ -53,23 +53,31 @@ The prior 12-session JSONL, JSON, and Markdown are retained unchanged as histori
 
 ## Distribution
 
-Develop locally or on a copied clone:
+From a clone, or as the source checkout itself:
 
 ```text
-omp plugin link /absolute/path/to/JEV-omp
+omp plugin link /absolute/path/to/jev-decision-maker
 ```
 
-Published as the private repository `github.com/hoaphm/jev-decision-maker` (commit `c140c13`), and the
-remote install path was then measured rather than assumed:
+Published at `https://github.com/hoaphm/jev-decision-maker`. The transcripts under `docs/research/`
+were scanned for tokens, `gh_`/`gho_` shapes, provider keys, the hindsight URL and password fields
+before publication; the only local detail left is one absolute `/home/hoaphm/...` path inside a
+historical results record.
+
+Install specs were measured, not assumed, in an isolated HOME with `GIT_CONFIG_GLOBAL=/dev/null`, no
+credential helper, no token and no D-Bus session (so any success is anonymous):
 
 ```text
-omp plugin install ssh://git@github.com/hoaphm/jev-decision-maker.git     # works
-omp plugin install github:hoaphm/jev-decision-maker[#main]                # fails: tarball API 404
-omp plugin install https://github.com/hoaphm/jev-decision-maker.git#main  # fails: same endpoint
+omp plugin install github:hoaphm/jev-decision-maker                        # ok
+omp plugin install github:hoaphm/jev-decision-maker#main                   # ok
+omp plugin install git+https://github.com/hoaphm/jev-decision-maker.git#main  # ok
+omp plugin install ssh://git@github.com/hoaphm/jev-decision-maker.git      # ok
 ```
 
-Bun resolves the `github:` and `https://…#ref` forms through
-`api.github.com/repos/<owner>/<repo>/tarball/` without git credentials, which answers `404` for a
-private repository; the `ssh://` spec clones through git and authenticates. `README.md` documents the
-working form. Making the repository public would unblock the `github:` shorthand - not done, since the
-transcripts under `docs/research/` are the owner's to publish.
+Each installed version 0.1.0 with `omp.extensions: ["./src/decision-maker.ts"]`, registered
+`decision_maker` only when `JEV_DECISION_MAKER=1`, and removed the tool on `omp plugin uninstall`.
+
+While the repository was private, only the `ssh://` form worked: `github:` and `https://…#ref` resolve
+through `api.github.com/repos/<owner>/<repo>/tarball/`, which answers `404` without credentials, and
+Bun does not consult the git credential helper on that path. For a private plugin repository, use an
+SSH spec - or `git clone` plus `omp plugin link`.

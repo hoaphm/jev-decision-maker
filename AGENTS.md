@@ -17,10 +17,9 @@ Single-context: one `CONTEXT.md` plus `docs/adr/` at the repo root. See `docs/ag
 ## Decision maker
 
 `decision_maker` ships as this repository's omp plugin, not as a project-local extension. Install it
-with `omp plugin install ssh://git@github.com/hoaphm/jev-decision-maker.git` (or `omp plugin link .`
-from a clone - see `README.md` for why only the SSH spec works against this private repository), then
-start the session with `JEV_DECISION_MAKER=1` and `OPENROUTER_API_KEY` present in the environment.
-Without both variables the tool is not registered and no request is sent.
+with `omp plugin install github:hoaphm/jev-decision-maker` (or `omp plugin link .` from a clone - see
+`README.md`), then start the session with `JEV_DECISION_MAKER=1` and `OPENROUTER_API_KEY` present in
+the environment. Without both variables the tool is not registered and no request is sent.
 
 The usage policy lives in [`rules/decision-maker.md`](./rules/decision-maker.md) and that file is the
 source of truth - do not duplicate it here. omp loads it as a rule only from an *installed* plugin

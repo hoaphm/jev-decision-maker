@@ -10,19 +10,24 @@ decision straight back to the agent.
 Requires omp (verified on 18.2.6). Nothing is added to your project's dependencies.
 
 ```sh
-# straight from the remote (verified)
-omp plugin install ssh://git@github.com/hoaphm/jev-decision-maker.git
+omp plugin install github:hoaphm/jev-decision-maker         # shorthand
+omp plugin install github:hoaphm/jev-decision-maker#main    # pinned ref
+```
 
-# or from a clone
-git clone git@github.com:hoaphm/jev-decision-maker.git
+The repository is public, so installing needs no GitHub credential on the target machine. To work from
+a clone instead:
+
+```sh
+git clone https://github.com/hoaphm/jev-decision-maker.git
 omp plugin link ./jev-decision-maker
 ```
 
-The repository is private, so the machine needs a GitHub SSH key (or an authenticated `gh` for the
-clone). `omp plugin install github:hoaphm/jev-decision-maker` and `https://…git#main` do **not** work
-here: Bun resolves those spec forms through `api.github.com/repos/<owner>/<repo>/tarball/` without
-your git credentials, and that endpoint answers `404` for a private repository. The `ssh://` spec is
-the form that authenticates.
+Verified with an empty git config, no token and no credential helper: `github:owner/repo`,
+`github:owner/repo#main`, `git+https://…#main` and `ssh://git@…` all install version 0.1.0, register
+`decision_maker` only under `JEV_DECISION_MAKER=1`, and uninstall cleanly. While this repository was
+private only the `ssh://` form worked - the others resolve through
+`api.github.com/repos/<owner>/<repo>/tarball/`, which answers `404` without credentials - so use an SSH
+spec (or a public repository) for any private plugin repo.
 
 Project-native extension discovery only reads `<cwd>/.omp/extensions`, and this repository no longer
 ships that directory: inside this repository the tool appears only after `omp plugin link .`, or for
