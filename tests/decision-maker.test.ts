@@ -91,7 +91,8 @@ type RegisteredTool = {
 };
 
 type Handler = (event: unknown, ctx: unknown) => unknown;
-type Registration = { tool: RegisteredTool | null; handlers: Map<string, Handler[]> };
+type RegisteredCommand = { handler: (args: string, ctx: unknown) => unknown };
+type Registration = { tool: RegisteredTool | null; handlers: Map<string, Handler[]>; commands: Map<string, RegisteredCommand> };
 
 /** Pinned because slot order on the shared status line is decided by this key. */
 const STATUS_KEY = "jev";
@@ -106,6 +107,7 @@ type RegistrationOptions = { optIn?: string; hasKey?: boolean; activeTools?: str
  */
 async function withRegistration<T>(options: RegistrationOptions, body: (registration: Registration) => Promise<T> | T): Promise<T> {
 	const handlers = new Map<string, Handler[]>();
+	const commands = new Map<string, RegisteredCommand>();
 	let tool: RegisteredTool | null = null;
 	const previousFlag = process.env.JEV_DECISION_MAKER;
 	const previousKey = process.env.OPENROUTER_API_KEY;
@@ -120,11 +122,14 @@ async function withRegistration<T>(options: RegistrationOptions, body: (registra
 		on: (event: string, handler: Handler) => {
 			handlers.set(event, [...(handlers.get(event) ?? []), handler]);
 		},
+		registerCommand: (name: string, definition: { handler: (args: string, ctx: unknown) => unknown }) => {
+			commands.set(name, definition);
+		},
 		getActiveTools: () => options.activeTools ?? ["read"],
 	};
 	try {
 		decisionMakerExtension(stub as unknown as Parameters<typeof decisionMakerExtension>[0]);
-		return await body({ tool, handlers });
+		return await body({ tool, handlers, commands });
 	} finally {
 		if (previousFlag === undefined) delete process.env.JEV_DECISION_MAKER;
 		else process.env.JEV_DECISION_MAKER = previousFlag;
@@ -495,6 +500,10 @@ async function main(): Promise<void> {
 			withRegistration({}, (registration) => {
 				assert.equal(registration.tool, null, "opting out must not register a tool");
 				assert.ok((registration.handlers.get("session_start") ?? []).length > 0, "no status handler registered while opted out");
+			assert.ok(
+				registration.commands.has("setup-jev"),
+				"the enable command must exist before the tool is enabled, or a fresh session cannot turn it on",
+			);
 				assert.deepEqual(
 					statusWrites(registration, "session_shutdown"),
 					[[STATUS_KEY, undefined]],

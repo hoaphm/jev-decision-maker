@@ -79,6 +79,31 @@ releases one. Print and `--mode json` runs have no UI context and write nothing,
 are unaffected; an RPC session has no terminal but still serialises each write as a frame, which is how
 the automated test observes the label. The label states capability, never authorization.
 
+## Setup command
+
+The plugin registers `/setup-jev` unconditionally - also while the tool is off - because it is the only
+discoverable way for a fresh session to turn the tool on:
+
+| Argument | Effect |
+| --- | --- |
+| none | reports the effective switch, both env files and their contents, credential presence, tool activeness |
+| `enable` / `disable` | writes/removes `JEV_DECISION_MAKER` in `<cwd>/.env` |
+| `enable --global` / `disable --global` | same, in `<agent dir>/.env` |
+| `key` | copies an already-exported `OPENROUTER_API_KEY` into `<agent dir>/.env`, mode 600, never printed |
+
+Measured constraints (omp 18.2.6, isolated HOME, RPC only, no inference):
+
+- extension UI has no masked input, and provider-login secret prompts are rejected in RPC, so the command
+  never asks for the credential - it copies one from the environment or prints the shell line to run;
+- a launch-directory `.env` is read from that exact directory, never from an ancestor, while
+  `<agent dir>/.env` is read from any working directory;
+- the process environment beats both files, which keeps `JEV_DECISION_MAKER=0` authoritative;
+- launching omp with `cwd == $HOME` makes omp switch to a temp directory, so the session cwd - and with it
+  the project `.env` target - is not the home directory; the harness must therefore drive the command from
+  a real project subdirectory;
+- `enable` checks `git check-ignore` and refuses to write a `.env` that git would track;
+- writes go through a temp file and `rename`, and merge instead of clobbering unrelated lines.
+
 ## Verification
 
 1. `bun tests/decision-maker.test.ts` verifies all existing decision guards and that the only budget reset reasons are `start`, `switch`, `branch`, and `tree`.
@@ -113,8 +138,9 @@ omp plugin install git+https://github.com/hoaphm/jev-decision-maker.git#main  # 
 omp plugin install ssh://git@github.com/hoaphm/jev-decision-maker.git      # ok
 ```
 
-Each installed version 0.1.0 with `omp.extensions: ["./src/decision-maker.ts"]`, registered
-`decision_maker` only when `JEV_DECISION_MAKER=1`, and removed the tool on `omp plugin uninstall`.
+Each installed the then-current package build with `omp.extensions: ["./src/decision-maker.ts"]`, registered
+`decision_maker` only when `JEV_DECISION_MAKER=1`, and removed the tool on `omp plugin uninstall`. No
+version literal is recorded here on purpose: the installed version tracks `package.json`.
 
 While the repository was private, only the `ssh://` form worked: `github:` and `https://…#ref` resolve
 through `api.github.com/repos/<owner>/<repo>/tarball/`, which answers `404` without credentials, and

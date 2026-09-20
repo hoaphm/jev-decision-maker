@@ -1,20 +1,21 @@
 /**
- * JEV Decision Maker — opt-in omp extension.
+ * JEV Decision Maker — opt-in omp plugin.
  *
- * At a genuine coding/debug branch point the main agent supplies 2-5 candidate
- * next steps plus the evidence it already has; this tool asks a TypeSafe System
- * One model (Jev, via OpenRouter) to pick one, and returns either the chosen
- * candidate id or `main` (defer / uncertain / any client-side failure) so the
- * main agent keeps reasoning on its own. The tool never executes a candidate,
- * never touches files, shell or the network beyond one inference call, and
- * never grants authorization.
+ * At a genuine coding/debug branch point the main agent supplies 2-5 candidate next steps plus the
+ * evidence it already has; this tool asks a TypeSafe System One model (Jev, via OpenRouter) to pick
+ * one, and returns either the chosen candidate id or `main` (defer / uncertain / any client-side
+ * failure) so the main agent keeps reasoning on its own. The tool never executes a candidate, never
+ * touches files, shell or the network beyond one inference call, and never grants authorization.
  *
- * Opt-in: registers only when JEV_DECISION_MAKER=1. Credential: reads
- * OPENROUTER_API_KEY from the environment at call time (never persisted, never
- * logged, never sent anywhere except the Authorization header).
+ * Opt-in: the tool registers only when JEV_DECISION_MAKER=1, which `/setup-jev` can write into a
+ * project `.env` or the agent `.env`. Credential: OPENROUTER_API_KEY from the environment (or that
+ * agent `.env`, which omp autoloads) at call time — never persisted by the tool, never logged, never
+ * sent anywhere except the Authorization header. `/setup-jev key` copies an already-exported key
+ * there and never prints it. The status line reports readiness even when the tool is off.
  */
 
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+import { SETUP_COMMAND, runSetupCommand } from "./setup-command.ts";
 
 export type CandidateKind = "read" | "edit" | "check";
 
@@ -403,6 +404,23 @@ export default function decisionMakerExtension(pi: ExtensionAPI): void {
 	pi.on("session_tree", async (_event, ctx) => refreshStatus(ctx));
 	// The host never clears a slot on its own, so releasing it is this extension's job.
 	pi.on("session_shutdown", async (_event, ctx) => ctx.ui.setStatus(STATUS_KEY, undefined));
+
+	// Registered whether or not the tool is on: this is the command a fresh session needs to enable it.
+	pi.registerCommand(SETUP_COMMAND, {
+		description: "Show or change the decision maker's enable switch and credential",
+		handler: async (args, ctx) => {
+			const report = await runSetupCommand(args ?? "", {
+				cwd: ctx.cwd,
+				env: process.env,
+				exec: async (file, argv) => {
+					const result = await pi.exec(file, argv);
+					return { code: result.code ?? 1, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
+				},
+				toolActive: optedIn && pi.getActiveTools().includes(TOOL_NAME),
+			});
+			for (const line of report.lines) ctx.ui.notify(line, report.level);
+		},
+	});
 
 	if (!optedIn) return;
 	const z = pi.zod;

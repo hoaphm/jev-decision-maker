@@ -51,6 +51,31 @@ Enable check: start omp in this checkout with both variables and read the status
 a call can reach the model; `◆ JEV no key` means the switch is set but the credential is not in the
 environment; `◆ JEV off` means the project config did not load.
 
+## Setup command
+
+`/setup-jev` is registered whether or not the tool is enabled, so a fresh session can turn it on:
+
+```sh
+/setup-jev                    # switch, both env files, credential presence, whether the tool is active
+/setup-jev enable              # writes JEV_DECISION_MAKER=1 into ./.env (this checkout only)
+/setup-jev enable --global     # ...into ~/.omp/agent/.env, which applies in every directory
+/setup-jev disable [--global]
+/setup-jev key                 # copies OPENROUTER_API_KEY from this session into ~/.omp/agent/.env
+```
+
+Measured rules the command follows:
+
+- The credential is never typed into omp. omp's extension UI has no masked input, so a key typed into a
+  prompt would land in the transcript; `/setup-jev key` only copies a key you already exported
+  (`export OPENROUTER_API_KEY=...`), stores it with mode 600 in `~/.omp/agent/.env`, and never prints the
+  value. Without one it prints the shell line to run instead.
+- A project `.env` is read from the launch directory exactly - omp does not walk parent directories, so
+  `enable` from a checkout still needs `--global` when you launch from a subdirectory. The command says so
+  when it writes.
+- `enable` refuses to write a `.env` that git would track: it runs `git check-ignore` first.
+- The process environment always wins over a `.env`. That is what keeps `JEV_DECISION_MAKER=0` - and the
+  benchmark's baseline arm - authoritative.
+
 ## Enable
 
 The tool is registered only for sessions started with both variables:

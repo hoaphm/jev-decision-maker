@@ -30,6 +30,8 @@ const STATUS_GRACE_MS = 1_000;
 // omp only honours an XDG root that already exists, so pre-create the temp ones: on a machine whose
 // real XDG layout exists, plugin state must still resolve inside this throwaway HOME.
 for (const leaf of ["xdg-data", "xdg-state", "xdg-cache"]) mkdirSync(join(HOME, leaf, "omp"), { recursive: true });
+const PROJECT = join(HOME, "project");
+mkdirSync(PROJECT, { recursive: true });
 /** Every place omp could place user plugin state for this isolated HOME. */
 const CANDIDATE_STATE_ROOTS = [join(HOME, ".omp", "plugins"), join(HOME, "xdg-data", "omp", "plugins")];
 
@@ -85,7 +87,7 @@ async function capture(argv: string[], options: { jevDecisionMaker?: string; ope
 	return { stdout, stderr, code };
 }
 
-type SessionProbe = { tools: string[]; statuses: Array<[string, string | undefined]> };
+type SessionProbe = { tools: string[]; statuses: Array<[string, string | undefined]>; commands: string[] };
 
 /**
  * Starts a headless RPC session, asks for the tool registry and records the extension's status
@@ -134,6 +136,7 @@ async function probeSession(options: { jevDecisionMaker?: string; openRouterKey?
 	]);
 
 	const statuses: Array<[string, string | undefined]> = [];
+	const commands = new Set<string>();
 	let state: Record<string, any> | undefined;
 	let consumed = 0;
 	let respondedAt = 0;
@@ -150,6 +153,9 @@ async function probeSession(options: { jevDecisionMaker?: string; openRouterKey?
 				continue;
 			}
 			if (frame.type === "response" && frame.command === "get_state" && frame.success === true) state = frame;
+			if (frame.type === "available_commands_update" && Array.isArray(frame.commands)) {
+				for (const command of frame.commands) commands.add(String(command.name));
+			}
 			if (frame.type === "extension_ui_request" && frame.method === "setStatus") {
 				statuses.push([String(frame.statusKey), frame.statusText === undefined ? undefined : String(frame.statusText)]);
 			}
@@ -171,7 +177,77 @@ async function probeSession(options: { jevDecisionMaker?: string; openRouterKey?
 	assert.ok(state, `get_state never answered; stderr: ${err.slice(0, 500)}`);
 	const dump = state?.data?.dumpTools;
 	assert.ok(Array.isArray(dump), "get_state returned no dumpTools");
-	return { tools: dump.map((tool: { name: string }) => tool.name), statuses };
+	return { tools: dump.map((tool: { name: string }) => tool.name), statuses, commands: [...commands].sort() };
+}
+
+type CommandRun = { notifies: string[]; agentStarted: boolean; invocations: number };
+
+/**
+ * Sends slash commands to a real RPC session and records the notifications the extension emits.
+ * A local-only command answers with data.agentInvoked === false, so any agent_start frame here would
+ * mean the probe accidentally started a model turn.
+ */
+async function driveCommands(cwd: string, commands: string[], openRouterKey?: string): Promise<CommandRun> {
+	const env = isolatedEnv({ jevDecisionMaker: "1", openRouterKey });
+	const proc = Bun.spawn(
+		["omp", "--mode", "rpc", "--no-session", "--no-title", "--no-skills", "--no-rules", "--model", "anthropic/claude-sonnet-4-5"],
+		{ cwd, env, stdin: "pipe", stdout: "pipe", stderr: "pipe" },
+	);
+	const notifies: string[] = [];
+	let agentStarted = false;
+	let invocations = 0;
+	let out = "";
+	let consumed = 0;
+	const scan = () => {
+		const pending = out.slice(consumed);
+		const lines = pending.split("\n");
+		consumed += pending.length - (lines.pop() ?? "").length;
+		for (const line of lines) {
+			if (!line.trim().startsWith("{")) continue;
+			let frame: Record<string, any>;
+			try {
+				frame = JSON.parse(line);
+			} catch {
+				continue;
+			}
+			if (frame.type === "agent_start") agentStarted = true;
+			if (frame.type === "extension_ui_request" && frame.method === "notify") notifies.push(String(frame.message ?? ""));
+			if (frame.type === "response" && frame.command === "prompt" && frame.success === true) {
+				invocations += 1;
+				if (frame.data?.agentInvoked === false) continue;
+			}
+		}
+	};
+	const pumping = (async () => {
+		const decoder = new TextDecoder();
+		const reader = proc.stdout.getReader();
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) return;
+			out += decoder.decode(value, { stream: true });
+		}
+	})();
+
+	const deadline = performance.now() + 60_000;
+	for (const [index, command] of commands.entries()) {
+		proc.stdin.write(JSON.stringify({ id: `cmd-${index}`, type: "prompt", message: command }) + "\n");
+		const want = index + 1;
+		while (invocations < want && performance.now() < deadline) {
+			scan();
+			await Bun.sleep(100);
+		}
+		// give the notification frames a moment to trail the acknowledgement
+		const settle = performance.now() + 1_500;
+		while (performance.now() < settle) {
+			scan();
+			await Bun.sleep(100);
+		}
+		scan();
+	}
+	proc.kill("SIGKILL");
+	await proc.exited;
+	await pumping;
+	return { notifies, agentStarted, invocations };
 }
 
 const failures: string[] = [];
@@ -233,11 +309,55 @@ async function main(): Promise<void> {
 			assert.equal(optedOut.tools.includes("decision_maker"), false);
 		});
 
+		await test("the setup command is discoverable and runs locally", async () => {
+			try {
+				const discovered = await probeSession();
+				assert.ok(
+					discovered.commands.includes("setup-jev"),
+					`setup-jev is not registered; got ${discovered.commands.slice(0, 20).join(",")}`,
+				);
+
+				const status = await driveCommands(PROJECT, ["/setup-jev"]);
+				assert.equal(status.agentStarted, false, "the probe started an agent turn");
+				assert.equal(status.invocations, 1, "the command was not acknowledged");
+				assert.ok(
+					status.notifies.some((line) => line.includes("JEV_DECISION_MAKER")),
+					`the status output did not name the switch: ${JSON.stringify(status.notifies)}`,
+				);
+
+				const enabled = await driveCommands(PROJECT, ["/setup-jev enable", "/setup-jev disable"]);
+				assert.equal(enabled.agentStarted, false, "the probe started an agent turn");
+				const projectEnv = join(PROJECT, ".env");
+				assert.ok(existsSync(projectEnv), "enable did not write a project .env");
+				assert.equal(
+					readFileSync(projectEnv, "utf8").includes("JEV_DECISION_MAKER=1"),
+					false,
+					"disable left the switch behind",
+				);
+
+				const secret = "sk-or-v1-plugin-test-placeholder";
+				const keyed = await driveCommands(PROJECT, ["/setup-jev key"], secret);
+				assert.equal(keyed.agentStarted, false, "the probe started an agent turn");
+				const agentEnv = join(HOME, ".omp", "agent", ".env");
+				assert.ok(existsSync(agentEnv), "key did not write the agent env file");
+				assert.ok(readFileSync(agentEnv, "utf8").includes(secret), "the credential was not stored");
+				for (const line of keyed.notifies) {
+					assert.equal(line.includes(secret), false, `the command echoed the credential: ${line}`);
+				}
+			} finally {
+				// The command writes real dotenv files (that is the feature); later checks must not inherit them.
+				for (const path of [join(PROJECT, ".env"), join(HOME, ".omp", "agent", ".env")]) {
+					if (existsSync(path)) unlinkSync(path);
+				}
+			}
+		});
+
 		await test("the README documents install paths, both variables and the labels", () => {
 			const readme = readFileSync(join(REPO, "README.md"), "utf8");
 			for (const fact of [
 				"omp plugin link",
 				"omp plugin install",
+				"setup-jev",
 				"JEV_DECISION_MAKER",
 				"OPENROUTER_API_KEY",
 				"◆ JEV on",
