@@ -1,0 +1,23 @@
+# JEV Decision Maker
+
+Experimental omp integration that asks a TypeSafe System One model (Jev, via OpenRouter) to pick
+one of the next steps the main agent already proposed at a coding/debug branch point. It ships as an
+omp plugin: the tool is `src/decision-maker.ts`, the usage policy is `rules/decision-maker.md`, and
+the measurement protocol and results live under `docs/research/`.
+
+## Language
+
+**Decision maker**:
+The component that selects one coding/debug step from the options the main agent supplies at a branch
+point. It is not a planner and not an executor.
+_Avoid_: decider, router, agent selector
+
+**Branch point**:
+A moment where at least two different steps are each adequate next moves. A required or obvious step
+is not a branch point.
+_Avoid_: fork, decision node, choice
+
+**Return to main**:
+Refusing to select and handing the reasoning back to the main agent, without substituting another
+model's answer for Jev's.
+_Avoid_: fallback, escalation, defer-to-human

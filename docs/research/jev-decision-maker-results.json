@@ -1,0 +1,490 @@
+{
+  "validity": "invalid-for-acceptance",
+  "validityReason": "OPENROUTER_API_KEY was sourced from the omp credential store (omp token openrouter) into the child environment instead of being supplied as an environment variable, which the approved plan forbade; the 12 sessions remain a historical record only.",
+  "credentialSource": "omp-credential-store",
+  "generatedAt": "2026-09-20T15:00:55.215Z",
+  "ompVersion": "omp/18.2.6",
+  "protocol": {
+    "fixtureSet": [
+      "ttl-cache",
+      "cursor-pagination",
+      "settings-override"
+    ],
+    "order": [
+      {
+        "fixture": "ttl-cache",
+        "repeat": 1,
+        "arm": "B"
+      },
+      {
+        "fixture": "ttl-cache",
+        "repeat": 1,
+        "arm": "J"
+      },
+      {
+        "fixture": "ttl-cache",
+        "repeat": 2,
+        "arm": "J"
+      },
+      {
+        "fixture": "ttl-cache",
+        "repeat": 2,
+        "arm": "B"
+      },
+      {
+        "fixture": "cursor-pagination",
+        "repeat": 1,
+        "arm": "J"
+      },
+      {
+        "fixture": "cursor-pagination",
+        "repeat": 1,
+        "arm": "B"
+      },
+      {
+        "fixture": "cursor-pagination",
+        "repeat": 2,
+        "arm": "B"
+      },
+      {
+        "fixture": "cursor-pagination",
+        "repeat": 2,
+        "arm": "J"
+      },
+      {
+        "fixture": "settings-override",
+        "repeat": 1,
+        "arm": "B"
+      },
+      {
+        "fixture": "settings-override",
+        "repeat": 1,
+        "arm": "J"
+      },
+      {
+        "fixture": "settings-override",
+        "repeat": 2,
+        "arm": "J"
+      },
+      {
+        "fixture": "settings-override",
+        "repeat": 2,
+        "arm": "B"
+      }
+    ],
+    "sessionMaxTime": "3m",
+    "sessionTimeoutMs": 190000,
+    "extension": "/home/hoaphm/Projects/JEV-omp/.omp/extensions/decision-maker.ts",
+    "toolsBaseline": "read,grep,glob,edit,write,bash",
+    "toolsTreatment": "read,grep,glob,edit,write,bash,decision_maker",
+    "mainModel": "@default",
+    "jevModel": "typesafe/jev-1.13",
+    "overlay": "tools:\n  approval:\n    decision_maker: allow\nbash:\n  allowCompoundCommands: false\n  patterns:\n    - match: \"bun tests/check.mjs\"\n      approval: allow\n",
+    "commonPolicy": "Work only on the current task in this workspace.\n\n- Edit files under `src/` only; leave `tests/check.mjs` exactly as it is.\n- Verify with `bun tests/check.mjs` (that exact command is pre-approved; other shell commands may be refused).\n- No git, no dependency installs, no network beyond the tools you are given.\n- If a `decision_maker` tool is available and you face a real fork between two or more distinct next\n  steps, supply 2-5 short candidates with the evidence you already have, then carry out the selected\n  candidate with your normal tools, or keep going on your own when it returns `main`.\n  Never invent options just to call it, and never call it for a step that is obvious or required.\n"
+  },
+  "sessions": [
+    {
+      "fixture": "ttl-cache",
+      "repeat": 1,
+      "arm": "B",
+      "workspace": "/tmp/jev-run-ttl-cache-1B-aRuGOU/workspace",
+      "wallMs": 39154,
+      "agentMs": 39133.6,
+      "graderMs": 20,
+      "agentExitCode": 0,
+      "agentTimedOut": false,
+      "publicCheck": "passed",
+      "grader": "passed",
+      "testsUnmodified": true,
+      "passed": true,
+      "failure": null,
+      "mainModels": [
+        "9router/cx/gpt-5.6-terra"
+      ],
+      "decisionCalls": 0,
+      "decisionSamples": [],
+      "selected": 0,
+      "deferred": 0,
+      "uncertain": 0,
+      "clientFailures": 0,
+      "jevModels": [],
+      "reportedCostUsd": null,
+      "extensionErrors": 0
+    },
+    {
+      "fixture": "ttl-cache",
+      "repeat": 1,
+      "arm": "J",
+      "workspace": "/tmp/jev-run-ttl-cache-1J-657SwI/workspace",
+      "wallMs": 28474.8,
+      "agentMs": 28454.5,
+      "graderMs": 20,
+      "agentExitCode": 0,
+      "agentTimedOut": false,
+      "publicCheck": "passed",
+      "grader": "passed",
+      "testsUnmodified": true,
+      "passed": true,
+      "failure": null,
+      "mainModels": [
+        "9router/cx/gpt-5.6-terra"
+      ],
+      "decisionCalls": 0,
+      "decisionSamples": [],
+      "selected": 0,
+      "deferred": 0,
+      "uncertain": 0,
+      "clientFailures": 0,
+      "jevModels": [],
+      "reportedCostUsd": null,
+      "extensionErrors": 0
+    },
+    {
+      "fixture": "ttl-cache",
+      "repeat": 2,
+      "arm": "J",
+      "workspace": "/tmp/jev-run-ttl-cache-2J-eYLuMP/workspace",
+      "wallMs": 28126.4,
+      "agentMs": 28096.1,
+      "graderMs": 29.1,
+      "agentExitCode": 0,
+      "agentTimedOut": false,
+      "publicCheck": "passed",
+      "grader": "passed",
+      "testsUnmodified": true,
+      "passed": true,
+      "failure": null,
+      "mainModels": [
+        "9router/cx/gpt-5.6-terra"
+      ],
+      "decisionCalls": 0,
+      "decisionSamples": [],
+      "selected": 0,
+      "deferred": 0,
+      "uncertain": 0,
+      "clientFailures": 0,
+      "jevModels": [],
+      "reportedCostUsd": null,
+      "extensionErrors": 0
+    },
+    {
+      "fixture": "ttl-cache",
+      "repeat": 2,
+      "arm": "B",
+      "workspace": "/tmp/jev-run-ttl-cache-2B-6eWRje/workspace",
+      "wallMs": 31282.4,
+      "agentMs": 31248.1,
+      "graderMs": 33.7,
+      "agentExitCode": 0,
+      "agentTimedOut": false,
+      "publicCheck": "passed",
+      "grader": "passed",
+      "testsUnmodified": true,
+      "passed": true,
+      "failure": null,
+      "mainModels": [
+        "9router/cx/gpt-5.6-terra"
+      ],
+      "decisionCalls": 0,
+      "decisionSamples": [],
+      "selected": 0,
+      "deferred": 0,
+      "uncertain": 0,
+      "clientFailures": 0,
+      "jevModels": [],
+      "reportedCostUsd": null,
+      "extensionErrors": 0
+    },
+    {
+      "fixture": "cursor-pagination",
+      "repeat": 1,
+      "arm": "J",
+      "workspace": "/tmp/jev-run-cursor-pagination-1J-O9s001/workspace",
+      "wallMs": 25496.2,
+      "agentMs": 25473.5,
+      "graderMs": 22.4,
+      "agentExitCode": 0,
+      "agentTimedOut": false,
+      "publicCheck": "passed",
+      "grader": "passed",
+      "testsUnmodified": true,
+      "passed": true,
+      "failure": null,
+      "mainModels": [
+        "9router/cx/gpt-5.6-terra"
+      ],
+      "decisionCalls": 0,
+      "decisionSamples": [],
+      "selected": 0,
+      "deferred": 0,
+      "uncertain": 0,
+      "clientFailures": 0,
+      "jevModels": [],
+      "reportedCostUsd": null,
+      "extensionErrors": 0
+    },
+    {
+      "fixture": "cursor-pagination",
+      "repeat": 1,
+      "arm": "B",
+      "workspace": "/tmp/jev-run-cursor-pagination-1B-G7n39F/workspace",
+      "wallMs": 26406.8,
+      "agentMs": 26373.3,
+      "graderMs": 32.9,
+      "agentExitCode": 0,
+      "agentTimedOut": false,
+      "publicCheck": "passed",
+      "grader": "passed",
+      "testsUnmodified": true,
+      "passed": true,
+      "failure": null,
+      "mainModels": [
+        "9router/cx/gpt-5.6-terra"
+      ],
+      "decisionCalls": 0,
+      "decisionSamples": [],
+      "selected": 0,
+      "deferred": 0,
+      "uncertain": 0,
+      "clientFailures": 0,
+      "jevModels": [],
+      "reportedCostUsd": null,
+      "extensionErrors": 0
+    },
+    {
+      "fixture": "cursor-pagination",
+      "repeat": 2,
+      "arm": "B",
+      "workspace": "/tmp/jev-run-cursor-pagination-2B-v3ih7K/workspace",
+      "wallMs": 24843.6,
+      "agentMs": 24807.7,
+      "graderMs": 35.4,
+      "agentExitCode": 0,
+      "agentTimedOut": false,
+      "publicCheck": "passed",
+      "grader": "passed",
+      "testsUnmodified": true,
+      "passed": true,
+      "failure": null,
+      "mainModels": [
+        "9router/cx/gpt-5.6-terra"
+      ],
+      "decisionCalls": 0,
+      "decisionSamples": [],
+      "selected": 0,
+      "deferred": 0,
+      "uncertain": 0,
+      "clientFailures": 0,
+      "jevModels": [],
+      "reportedCostUsd": null,
+      "extensionErrors": 0
+    },
+    {
+      "fixture": "cursor-pagination",
+      "repeat": 2,
+      "arm": "J",
+      "workspace": "/tmp/jev-run-cursor-pagination-2J-CKalRf/workspace",
+      "wallMs": 23219.9,
+      "agentMs": 23196,
+      "graderMs": 23.5,
+      "agentExitCode": 0,
+      "agentTimedOut": false,
+      "publicCheck": "passed",
+      "grader": "passed",
+      "testsUnmodified": true,
+      "passed": true,
+      "failure": null,
+      "mainModels": [
+        "9router/cx/gpt-5.6-terra"
+      ],
+      "decisionCalls": 0,
+      "decisionSamples": [],
+      "selected": 0,
+      "deferred": 0,
+      "uncertain": 0,
+      "clientFailures": 0,
+      "jevModels": [],
+      "reportedCostUsd": null,
+      "extensionErrors": 0
+    },
+    {
+      "fixture": "settings-override",
+      "repeat": 1,
+      "arm": "B",
+      "workspace": "/tmp/jev-run-settings-override-1B-JfwRae/workspace",
+      "wallMs": 24784.3,
+      "agentMs": 24758.5,
+      "graderMs": 25,
+      "agentExitCode": 0,
+      "agentTimedOut": false,
+      "publicCheck": "passed",
+      "grader": "passed",
+      "testsUnmodified": true,
+      "passed": true,
+      "failure": null,
+      "mainModels": [
+        "9router/cx/gpt-5.6-terra"
+      ],
+      "decisionCalls": 0,
+      "decisionSamples": [],
+      "selected": 0,
+      "deferred": 0,
+      "uncertain": 0,
+      "clientFailures": 0,
+      "jevModels": [],
+      "reportedCostUsd": null,
+      "extensionErrors": 0
+    },
+    {
+      "fixture": "settings-override",
+      "repeat": 1,
+      "arm": "J",
+      "workspace": "/tmp/jev-run-settings-override-1J-vfQXdb/workspace",
+      "wallMs": 37472.2,
+      "agentMs": 37440.3,
+      "graderMs": 31.3,
+      "agentExitCode": 0,
+      "agentTimedOut": false,
+      "publicCheck": "passed",
+      "grader": "passed",
+      "testsUnmodified": true,
+      "passed": true,
+      "failure": null,
+      "mainModels": [
+        "9router/cx/gpt-5.6-terra"
+      ],
+      "decisionCalls": 0,
+      "decisionSamples": [],
+      "selected": 0,
+      "deferred": 0,
+      "uncertain": 0,
+      "clientFailures": 0,
+      "jevModels": [],
+      "reportedCostUsd": null,
+      "extensionErrors": 0
+    },
+    {
+      "fixture": "settings-override",
+      "repeat": 2,
+      "arm": "J",
+      "workspace": "/tmp/jev-run-settings-override-2J-cRcHuJ/workspace",
+      "wallMs": 25497.5,
+      "agentMs": 25471.8,
+      "graderMs": 25,
+      "agentExitCode": 0,
+      "agentTimedOut": false,
+      "publicCheck": "passed",
+      "grader": "passed",
+      "testsUnmodified": true,
+      "passed": true,
+      "failure": null,
+      "mainModels": [
+        "9router/cx/gpt-5.6-terra"
+      ],
+      "decisionCalls": 0,
+      "decisionSamples": [],
+      "selected": 0,
+      "deferred": 0,
+      "uncertain": 0,
+      "clientFailures": 0,
+      "jevModels": [],
+      "reportedCostUsd": null,
+      "extensionErrors": 0
+    },
+    {
+      "fixture": "settings-override",
+      "repeat": 2,
+      "arm": "B",
+      "workspace": "/tmp/jev-run-settings-override-2B-qV8GYx/workspace",
+      "wallMs": 26045.4,
+      "agentMs": 26024.7,
+      "graderMs": 20.3,
+      "agentExitCode": 0,
+      "agentTimedOut": false,
+      "publicCheck": "passed",
+      "grader": "passed",
+      "testsUnmodified": true,
+      "passed": true,
+      "failure": null,
+      "mainModels": [
+        "9router/cx/gpt-5.6-terra"
+      ],
+      "decisionCalls": 0,
+      "decisionSamples": [],
+      "selected": 0,
+      "deferred": 0,
+      "uncertain": 0,
+      "clientFailures": 0,
+      "jevModels": [],
+      "reportedCostUsd": null,
+      "extensionErrors": 0
+    }
+  ],
+  "pairs": [
+    {
+      "fixture": "ttl-cache",
+      "repeat": 1,
+      "baselineMs": 39154,
+      "treatmentMs": 28474.8,
+      "ratio": 0.7273,
+      "treatmentFaster": true
+    },
+    {
+      "fixture": "ttl-cache",
+      "repeat": 2,
+      "baselineMs": 31282.4,
+      "treatmentMs": 28126.4,
+      "ratio": 0.8991,
+      "treatmentFaster": true
+    },
+    {
+      "fixture": "cursor-pagination",
+      "repeat": 1,
+      "baselineMs": 26406.8,
+      "treatmentMs": 25496.2,
+      "ratio": 0.9655,
+      "treatmentFaster": true
+    },
+    {
+      "fixture": "cursor-pagination",
+      "repeat": 2,
+      "baselineMs": 24843.6,
+      "treatmentMs": 23219.9,
+      "ratio": 0.9346,
+      "treatmentFaster": true
+    },
+    {
+      "fixture": "settings-override",
+      "repeat": 1,
+      "baselineMs": 24784.3,
+      "treatmentMs": 37472.2,
+      "ratio": 1.5119,
+      "treatmentFaster": false
+    },
+    {
+      "fixture": "settings-override",
+      "repeat": 2,
+      "baselineMs": 26045.4,
+      "treatmentMs": 25497.5,
+      "ratio": 0.979,
+      "treatmentFaster": true
+    }
+  ],
+  "gate": {
+    "aborted": null,
+    "allSessionsPassed": true,
+    "jevExercised": false,
+    "mainModelsBaseline": [
+      "9router/cx/gpt-5.6-terra"
+    ],
+    "mainModelsTreatment": [
+      "9router/cx/gpt-5.6-terra"
+    ],
+    "mainModelStable": true,
+    "jevModels": [],
+    "medianRatio": 0.9501,
+    "fasterPairs": 5,
+    "speedupHolds": false,
+    "achieved": false
+  }
+}

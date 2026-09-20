@@ -1,0 +1,11 @@
+{
+	"name": "jev-decision-maker",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"description": "Opt-in omp tool that lets a TypeSafe Jev model pick the next coding step from candidates the main agent proposes.",
+	"keywords": ["omp", "omp-extension", "jev", "typesafe", "openrouter", "decision-maker"],
+	"omp": {
+		"extensions": ["./src/decision-maker.ts"]
+	}
+}
