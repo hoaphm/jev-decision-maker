@@ -10,9 +10,19 @@ decision straight back to the agent.
 Requires omp (verified on 18.2.6). Nothing is added to your project's dependencies.
 
 ```sh
-omp plugin link .                     # from a clone of this repository
-omp plugin install <git-url>          # from a Git remote, once this repository has one
+# straight from the remote (verified)
+omp plugin install ssh://git@github.com/hoaphm/jev-decision-maker.git
+
+# or from a clone
+git clone git@github.com:hoaphm/jev-decision-maker.git
+omp plugin link ./jev-decision-maker
 ```
+
+The repository is private, so the machine needs a GitHub SSH key (or an authenticated `gh` for the
+clone). `omp plugin install github:hoaphm/jev-decision-maker` and `https://…git#main` do **not** work
+here: Bun resolves those spec forms through `api.github.com/repos/<owner>/<repo>/tarball/` without
+your git credentials, and that endpoint answers `404` for a private repository. The `ssh://` spec is
+the form that authenticates.
 
 Project-native extension discovery only reads `<cwd>/.omp/extensions`, and this repository no longer
 ships that directory: inside this repository the tool appears only after `omp plugin link .`, or for

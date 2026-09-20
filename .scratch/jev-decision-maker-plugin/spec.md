@@ -59,10 +59,17 @@ Develop locally or on a copied clone:
 omp plugin link /absolute/path/to/JEV-omp
 ```
 
-After the repository is pushed to a user-controlled Git remote, install on another machine with an OMP-supported Git spec, for example:
+Published as the private repository `github.com/hoaphm/jev-decision-maker` (commit `c140c13`), and the
+remote install path was then measured rather than assumed:
 
 ```text
-omp plugin install github:OWNER/JEV-omp#main
+omp plugin install ssh://git@github.com/hoaphm/jev-decision-maker.git     # works
+omp plugin install github:hoaphm/jev-decision-maker[#main]                # fails: tarball API 404
+omp plugin install https://github.com/hoaphm/jev-decision-maker.git#main  # fails: same endpoint
 ```
 
-No Git remote exists at this design point, so publication is intentionally deferred to the repository owner.
+Bun resolves the `github:` and `https://…#ref` forms through
+`api.github.com/repos/<owner>/<repo>/tarball/` without git credentials, which answers `404` for a
+private repository; the `ssh://` spec clones through git and authenticates. `README.md` documents the
+working form. Making the repository public would unblock the `github:` shorthand - not done, since the
+transcripts under `docs/research/` are the owner's to publish.
