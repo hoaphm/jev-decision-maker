@@ -4,22 +4,23 @@
  * Measured behaviour this leans on (omp 18.2.6, isolated HOME, RPC get_state only, no inference):
  *   - a launch-directory `.env` is read from the launch directory exactly, never from ancestors, so a
  *     project switch only applies when omp starts in that directory;
- *   - `~/.omp/agent/.env` is read regardless of the working directory, so it works as the machine-wide
- *     switch and as the credential store;
+ *   - `~/.omp/agent/.env` is read regardless of the working directory, so it works as an explicit
+ *     machine-wide switch;
  *   - the process environment beats both, which is what keeps `JEV_DECISION_MAKER=0` authoritative.
  *
- * The command never asks for the credential: omp's extension UI has no masked input, so a key typed
- * into a prompt would land in the transcript. It copies a key the operator already exported, or prints
- * the shell line to run instead.
+ * The command owns activation only. The credential belongs to omp: `status` asks the caller for
+ * credential presence and never reads, writes or prints a key itself.
+ *
+ * A local switch lives inside the operator's worktree, so `enable` proves Git cannot commit it before
+ * writing: a tracked target is refused, an unignored one gets exactly one root-relative ignore rule.
  */
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, relative } from "node:path";
 
 export const SETUP_COMMAND = "setup-jev";
 export const SWITCH_KEY = "JEV_DECISION_MAKER";
-export const CREDENTIAL_KEY = "OPENROUTER_API_KEY";
 const ENV_MODE = 0o600;
 const ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -31,6 +32,11 @@ export type SetupContext = {
 	exec: Exec;
 	/** Whether the tool is in the session's active set; omitted when the caller cannot know. */
 	toolActive?: boolean;
+	/**
+	 * Whether omp can resolve an OpenRouter credential for this session. The command never resolves or
+	 * stores a key itself, so a caller that cannot probe omits this and the report stays silent about it.
+	 */
+	credentialPresent?: () => Promise<boolean>;
 };
 export type SetupReport = { level: "info" | "warn" | "error"; lines: string[] };
 
@@ -80,7 +86,7 @@ function readEnvFile(path: string): string {
 	return existsSync(path) ? readFileSync(path, "utf8") : "";
 }
 
-/** Writes through a temp file so a crashed write cannot truncate the operator's credential file. */
+/** Writes through a temp file so a crashed write cannot truncate the target file. */
 export function writeEnvFile(path: string, key: string, value: string | undefined): void {
 	mkdirSync(dirname(path), { recursive: true });
 	const updated = setUpEnvFile(readEnvFile(path), key, value);
@@ -96,15 +102,49 @@ function effectiveSwitch(env: Record<string, string | undefined>): string {
 	return raw === "1" ? "1 (on)" : `${raw} (not 1, so off)`;
 }
 
-async function isTrackedElsewhere(ctx: SetupContext, path: string): Promise<string | null> {
-	const worktree = await ctx.exec("git", ["rev-parse", "--is-inside-work-tree"]);
+/**
+ * Makes the launch-directory switch uncommittable without mutating anything on a refusal.
+ *
+ * Every Git call after the root probe runs with `-C <root>`: `pi.exec` starts Git in the launch
+ * directory, and the pathspecs here are worktree-root-relative, so omitting the flag would test the
+ * wrong path whenever omp starts in a subdirectory. Returns a report line on refusal, `null` to write.
+ */
+async function prepareProjectEnvFile(ctx: SetupContext, path: string): Promise<string | null> {
+	const worktree = await ctx.exec("git", ["rev-parse", "--show-toplevel"]);
+	// Not a worktree: there is nothing Git could commit, so the switch is safe to write.
 	if (worktree.code !== 0) return null;
-	const ignored = await ctx.exec("git", ["check-ignore", "--quiet", relative(ctx.cwd, path) || ".env"]);
+	// `git rev-parse --show-toplevel` prints the resolved path, while `ctx.cwd` may hold a symlinked
+	// one (`/tmp` on macOS), so both sides are canonicalized before the pathspec is derived.
+	const root = realpathSync(worktree.stdout.trim());
+	const dir = relative(root, realpathSync(ctx.cwd)).replaceAll("\\", "/");
+	if (dir.startsWith("..")) return `refusing to write ${path}: it is outside the git worktree.`;
+	/** Root-relative, so every Git call below must run with `-C root`. */
+	const target = dir.length === 0 ? ".env" : `${dir}/.env`;
+	const at = ["-C", root];
+	const tracked = await ctx.exec("git", [...at, "ls-files", "--error-unmatch", "--", target]);
+	if (tracked.code === 0) {
+		return (
+			`refusing to write ${path}: git already tracks it, so the switch could be committed. ` +
+			`Remove it from the index (\`git rm --cached ${target}\`) first, or use \`enable --global\`.`
+		);
+	}
+	if (tracked.code !== 1) return `refusing to write ${path}: git could not tell whether it is tracked.`;
+
+	const ignored = await ctx.exec("git", [...at, "check-ignore", "--quiet", "--", target]);
 	if (ignored.code === 0) return null;
-	return (
-		`refusing to write ${path}: it is inside a git worktree and not ignored, so the switch could be committed. ` +
-		`Run \`git check-ignore -q .env\` yourself, or add ".env" to .gitignore first.`
-	);
+	if (ignored.code !== 1) return `refusing to write ${path}: git could not tell whether it is ignored.`;
+
+	const pattern = `/${target}`;
+	const ignorePath = join(root, ".gitignore");
+	const current = readEnvFile(ignorePath);
+	if (!current.split("\n").some((line) => line.trim() === pattern)) {
+		writeFileSync(ignorePath, `${current.replace(/\n*$/, "\n")}${pattern}\n`);
+	}
+	const verified = await ctx.exec("git", [...at, "check-ignore", "--quiet", "--", target]);
+	if (verified.code === 0) return null;
+	return verified.code === 1
+		? `refusing to write ${path}: git still does not ignore it after adding "${pattern}" to ${ignorePath}.`
+		: `refusing to write ${path}: git could not verify the ignore rule in ${ignorePath}.`;
 }
 
 async function status(ctx: SetupContext): Promise<SetupReport> {
@@ -112,26 +152,25 @@ async function status(ctx: SetupContext): Promise<SetupReport> {
 	const agentEnv = agentEnvPath(ctx.env);
 	const projectSwitch = parseEnvFile(readEnvFile(projectEnv)).get(SWITCH_KEY);
 	const agentSwitch = parseEnvFile(readEnvFile(agentEnv)).get(SWITCH_KEY);
-	const agentCredential = parseEnvFile(readEnvFile(agentEnv)).get(CREDENTIAL_KEY);
-	const sessionCredential = ctx.env[CREDENTIAL_KEY]?.trim();
+	const present = ctx.credentialPresent === undefined ? undefined : await ctx.credentialPresent();
 	const lines = [
 		`${SWITCH_KEY} in this session: ${effectiveSwitch(ctx.env)}`,
 		`project env file: ${projectEnv} -> ${projectSwitch ?? "no switch set"}`,
 		`agent env file:   ${agentEnv} -> ${agentSwitch ?? "no switch set"}`,
-		`credential: ${sessionCredential ? "present in the session environment" : agentCredential ? "present in the agent env file" : "missing"}`,
 	];
+	if (present !== undefined) lines.push(`credential: ${present ? "omp can resolve an OpenRouter key" : "missing"}`);
 	if (ctx.toolActive !== undefined) lines.push(`tool active in this session: ${ctx.toolActive ? "yes" : "no"}`);
 	lines.push(
 		"enable: /setup-jev enable (this checkout, applies when omp starts here) or `enable --global` (every directory)",
-		"credential: export OPENROUTER_API_KEY=... then /setup-jev key, or /setup-jev key with it already exported",
+		"credential: configure an OpenRouter key for omp itself, then re-run /setup-jev",
 	);
-	return { level: sessionCredential || agentCredential ? "info" : "warn", lines };
+	return { level: present === false ? "warn" : "info", lines };
 }
 
 async function enable(ctx: SetupContext, global: boolean): Promise<SetupReport> {
 	const path = global ? agentEnvPath(ctx.env) : join(ctx.cwd, ".env");
 	if (!global) {
-		const blocked = await isTrackedElsewhere(ctx, path);
+		const blocked = await prepareProjectEnvFile(ctx, path);
 		if (blocked) return { level: "error", lines: [blocked] };
 	}
 	writeEnvFile(path, SWITCH_KEY, "1");
@@ -151,34 +190,11 @@ async function disable(ctx: SetupContext, global: boolean): Promise<SetupReport>
 	const path = global ? agentEnvPath(ctx.env) : join(ctx.cwd, ".env");
 	if (!existsSync(path)) return { level: "info", lines: [`nothing to disable: ${path} does not exist`] };
 	writeEnvFile(path, SWITCH_KEY, undefined);
+	// The ignore rule stays: it is the operator's file, and another tool may rely on it.
 	return { level: "info", lines: [`disabled: ${SWITCH_KEY} removed from ${path}`] };
 }
 
-function storeCredential(ctx: SetupContext): SetupReport {
-	const value = ctx.env[CREDENTIAL_KEY]?.trim();
-	if (!value) {
-		return {
-			level: "error",
-			lines: [
-				`no ${CREDENTIAL_KEY} in this session's environment, and this command never prompts for one:`,
-				"omp's extension UI has no masked input, so a typed key would land in the transcript.",
-				`Run \`export ${CREDENTIAL_KEY}=<key>\` in your own shell, then start omp and run /setup-jev key again -`,
-				`or append it yourself: printf '%s\\n' "${CREDENTIAL_KEY}=<key>" >> ${agentEnvPath(ctx.env)}`,
-			],
-		};
-	}
-	const path = agentEnvPath(ctx.env);
-	writeEnvFile(path, CREDENTIAL_KEY, value);
-	return {
-		level: "info",
-		lines: [
-			`credential stored in ${path} (mode 600, value never printed or logged).`,
-			"the environment still wins if you export it later.",
-		],
-	};
-}
-
-/** Runs one `/setup-jev` invocation. Never reads the UI, never calls the network. */
+/** Runs one `/setup-jev` invocation. Never reads the UI, never resolves a credential, never calls the network. */
 export async function runSetupCommand(args: string, ctx: SetupContext): Promise<SetupReport> {
 	const [subcommand = "", ...flags] = args.trim().split(/\s+/).filter((part) => part.length > 0);
 	const global = flags.includes("--global");
@@ -189,12 +205,10 @@ export async function runSetupCommand(args: string, ctx: SetupContext): Promise<
 			return await enable(ctx, global);
 		case "disable":
 			return await disable(ctx, global);
-		case "key":
-			return storeCredential(ctx);
 		default:
 			return {
 				level: "error",
-				lines: [`unknown /setup-jev argument: ${subcommand}`, "usage: /setup-jev [enable|disable|key] [--global]"],
+				lines: [`unknown /setup-jev argument: ${subcommand}`, "usage: /setup-jev [enable|disable] [--global]"],
 			};
 	}
 }

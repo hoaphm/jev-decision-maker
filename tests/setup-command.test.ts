@@ -1,7 +1,12 @@
 /**
- * `/setup-jev` behaviour: the enable switch, the credential hand-off, and the guards around writing
- * either of them. Everything here runs against a temp directory and a stub git - no omp, no network,
- * no model.
+ * `/setup-jev` behaviour: the enable switch, the git guard around a project switch, and the credential
+ * presence report. Everything here runs against a temp directory - no omp, no network, no model, and
+ * no credential is ever read, written or echoed by the command.
+ *
+ * The subdirectory case runs real `git` with the child's cwd set to the launch directory: a stub
+ * cannot catch a pathspec that Git resolves against the wrong directory, which is the bug that made
+ * a local enable report "does not ignore it after updating .gitignore" whenever omp started below
+ * the worktree root.
  */
 
 import assert from "node:assert/strict";
@@ -14,17 +19,20 @@ const SECRET = "sk-or-v1-this-value-must-never-be-printed";
 
 type Exec = (file: string, args: string[]) => Promise<{ code: number; stdout: string; stderr: string }>;
 
-/** Stub `git`: reports whether the cwd is a worktree and whether the path is ignored. */
-function gitStub(options: { worktree: boolean; ignored?: boolean }): Exec {
+/** Stub `git` for a directory that is not a worktree: every probe answers "not a repository". */
+const notARepository: Exec = async () => ({ code: 128, stdout: "", stderr: "not a git repository" });
+
+/** Real `git`, run with `cwd` as the child's working directory. */
+function realGit(cwd: string): Exec {
 	return async (file, args) => {
 		if (file !== "git") return { code: 127, stdout: "", stderr: "not found" };
-		if (args.includes("--is-inside-work-tree")) {
-			return { code: options.worktree ? 0 : 128, stdout: `${options.worktree}`, stderr: "" };
-		}
-		if (args.includes("check-ignore")) {
-			return { code: options.ignored ? 0 : 1, stdout: options.ignored ? ".env" : "", stderr: "" };
-		}
-		return { code: 1, stdout: "", stderr: "unexpected git call" };
+		const proc = Bun.spawn(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
+		const [stdout, stderr, code] = await Promise.all([
+			new Response(proc.stdout).text(),
+			new Response(proc.stderr).text(),
+			proc.exited,
+		]);
+		return { code, stdout, stderr };
 	};
 }
 
@@ -33,7 +41,8 @@ type RunOptions = {
 	cwd: string;
 	home: string;
 	env?: Record<string, string | undefined>;
-	git?: { worktree: boolean; ignored?: boolean };
+	exec?: Exec;
+	credentialPresent?: boolean;
 };
 
 function run(options: RunOptions) {
@@ -41,7 +50,8 @@ function run(options: RunOptions) {
 	return runSetupCommand(options.args ?? "", {
 		cwd: options.cwd,
 		env,
-		exec: gitStub(options.git ?? { worktree: false }),
+		exec: options.exec ?? notARepository,
+		...(options.credentialPresent === undefined ? {} : { credentialPresent: async () => options.credentialPresent === true }),
 	});
 }
 
@@ -75,28 +85,23 @@ async function main(): Promise<void> {
 		const disabled = setUpEnvFile(enabled, "JEV_DECISION_MAKER", undefined);
 		assert.ok(disabled.includes("OTHER=1"));
 		assert.equal(parseEnvFile(disabled).has("JEV_DECISION_MAKER"), false);
-		// A key that was never present is appended, and other keys are untouched.
-		const keyed = setUpEnvFile(disabled, "OPENROUTER_API_KEY", SECRET);
-		assert.equal(parseEnvFile(keyed).get("OPENROUTER_API_KEY"), SECRET);
-		assert.ok(keyed.includes("OTHER=1"));
 	});
 
 	await test("writing an env file replaces a stale key and keeps other lines", () => {
 		const root = tempRoot();
 		try {
 			const path = join(root, ".env");
-			writeFileSync(path, "OTHER=1\nOPENROUTER_API_KEY=old\n");
-			writeEnvFile(path, "OPENROUTER_API_KEY", SECRET);
+			writeFileSync(path, "OTHER=1\nJEV_DECISION_MAKER=0\n");
+			writeEnvFile(path, "JEV_DECISION_MAKER", "1");
 			const written = readFileSync(path, "utf8");
 			assert.ok(written.includes("OTHER=1"), "unrelated line was dropped");
-			assert.equal(written.includes("old"), false, "stale value survived");
-			assert.equal(parseEnvFile(written).get("OPENROUTER_API_KEY"), SECRET);
+			assert.equal(parseEnvFile(written).get("JEV_DECISION_MAKER"), "1");
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
 	});
 
-	await test("status reports the effective switch, the files and the credential presence", async () => {
+	await test("status reports the switch, both env files and omp credential presence", async () => {
 		const root = tempRoot();
 		try {
 			const cwd = join(root, "project");
@@ -104,8 +109,8 @@ async function main(): Promise<void> {
 			mkdirSync(cwd, { recursive: true });
 			writeFileSync(join(cwd, ".env"), "JEV_DECISION_MAKER=1\n");
 
-			const report = await run({ cwd, home: root });
-			// Switch on but no credential anywhere: actionable, not an error, so the report warns.
+			const report = await run({ cwd, home: root, credentialPresent: false });
+			// Switch on but no credential in omp: actionable, not an error, so the report warns.
 			assert.equal(report.level, "warn");
 			const text = report.lines.join("\n");
 			assert.ok(text.includes("JEV_DECISION_MAKER"), "does not name the switch");
@@ -113,25 +118,51 @@ async function main(): Promise<void> {
 			assert.ok(text.includes(join(root, ".omp", "agent", ".env")), "does not name the agent env file");
 			assert.ok(/credential: missing/.test(text), `credential line wrong: ${text}`);
 
-			const keyed = await run({ cwd, home: root, env: { OPENROUTER_API_KEY: SECRET } });
-			const keyedText = keyed.lines.join("\n");
-			assert.ok(/credential: present/.test(keyedText), `credential line wrong: ${keyedText}`);
-			assert.equal(keyedText.includes(SECRET), false, "the status must never echo the credential");
+			const configured = await run({ cwd, home: root, credentialPresent: true });
+			assert.equal(configured.level, "info");
+			assert.ok(/credential: omp can resolve/.test(configured.lines.join("\n")), configured.lines.join("\n"));
+			for (const line of [...report.lines, ...configured.lines]) {
+				assert.equal(line.includes(SECRET), false, "the command must never carry a credential");
+			}
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
 	});
 
-	await test("enable refuses to write an env file that git would track", async () => {
+	await test("local enable ignores the switch when omp starts in a subdirectory", async () => {
 		const root = tempRoot();
 		try {
-			const cwd = join(root, "project");
+			const project = join(root, "project");
+			const cwd = join(project, "nested");
 			mkdirSync(cwd, { recursive: true });
-			const refused = await run({ args: "enable", cwd, home: root, git: { worktree: true, ignored: false } });
-			assert.equal(refused.level, "error");
-			const text = refused.lines.join("\n");
-			assert.ok(text.includes("check-ignore"), `no gitignore guidance: ${text}`);
-			assert.equal(existsSync(join(cwd, ".env")), false, "wrote anyway");
+			const init = await realGit(project)("git", ["init", "--quiet", "."]);
+			assert.equal(init.code, 0, `git init failed: ${init.stderr}`);
+			const exec = realGit(cwd);
+
+			const enabled = await run({ args: "enable", cwd, home: root, exec });
+			assert.equal(enabled.level, "info", enabled.lines.join("\n"));
+			assert.equal(parseEnvFile(readFileSync(join(cwd, ".env"), "utf8")).get("JEV_DECISION_MAKER"), "1");
+			assert.equal(readFileSync(join(project, ".gitignore"), "utf8").trim(), "/nested/.env");
+
+			const again = await run({ args: "enable", cwd, home: root, exec });
+			assert.equal(again.level, "info", again.lines.join("\n"));
+			assert.equal(
+				readFileSync(join(project, ".gitignore"), "utf8").split("\n").filter((line) => line === "/nested/.env").length,
+				1,
+				"a second enable duplicated the ignore rule",
+			);
+
+			// A tracked switch could still be committed, so enable must refuse without mutating anything.
+			const ignoreBefore = readFileSync(join(project, ".gitignore"), "utf8");
+			const staged = await realGit(project)("git", ["add", "-f", "nested/.env"]);
+			assert.equal(staged.code, 0, `git add failed: ${staged.stderr}`);
+			assert.equal((await run({ args: "disable", cwd, home: root, exec })).level, "info");
+
+			const refused = await run({ args: "enable", cwd, home: root, exec });
+			assert.equal(refused.level, "error", refused.lines.join("\n"));
+			assert.ok(refused.lines.join("\n").includes("tracks it"), refused.lines.join("\n"));
+			assert.equal(readFileSync(join(project, ".gitignore"), "utf8"), ignoreBefore, "a refusal rewrote .gitignore");
+			assert.equal(parseEnvFile(readFileSync(join(cwd, ".env"), "utf8")).has("JEV_DECISION_MAKER"), false, "wrote anyway");
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
@@ -142,7 +173,7 @@ async function main(): Promise<void> {
 		try {
 			const cwd = join(root, "project");
 			mkdirSync(cwd, { recursive: true });
-			const local = await run({ args: "enable", cwd, home: root, git: { worktree: true, ignored: true } });
+			const local = await run({ args: "enable", cwd, home: root });
 			assert.equal(local.level, "info");
 			assert.equal(parseEnvFile(readFileSync(join(cwd, ".env"), "utf8")).get("JEV_DECISION_MAKER"), "1");
 			assert.ok(local.lines.join("\n").includes("subdirector"), "the cwd caveat is not stated");
@@ -161,34 +192,15 @@ async function main(): Promise<void> {
 		}
 	});
 
-	await test("key refuses without a credential in the session environment", async () => {
+	await test("the command no longer owns a credential", async () => {
 		const root = tempRoot();
 		try {
 			const cwd = join(root, "project");
 			mkdirSync(cwd, { recursive: true });
-			const refused = await run({ args: "key", cwd, home: root });
-			assert.equal(refused.level, "error");
-			const text = refused.lines.join("\n");
-			assert.ok(text.includes("OPENROUTER_API_KEY"), "does not name the variable");
-			assert.ok(text.includes("export"), `no shell guidance: ${text}`);
-			assert.equal(existsSync(join(root, ".omp", "agent", ".env")), false, "wrote an empty credential");
-		} finally {
-			rmSync(root, { recursive: true, force: true });
-		}
-	});
-
-	await test("key stores an existing credential without echoing it", async () => {
-		const root = tempRoot();
-		try {
-			const cwd = join(root, "project");
-			mkdirSync(cwd, { recursive: true });
-			const stored = await run({ args: "key", cwd, home: root, env: { OPENROUTER_API_KEY: ` ${SECRET} ` } });
-			assert.equal(stored.level, "info");
-			const text = stored.lines.join("\n");
-			assert.equal(text.includes(SECRET), false, "the command echoed the credential");
-			const agentEnv = join(root, ".omp", "agent", ".env");
-			assert.equal(parseEnvFile(readFileSync(agentEnv, "utf8")).get("OPENROUTER_API_KEY"), SECRET, "value not trimmed/stored");
-			assert.equal(statSync(agentEnv).mode & 0o777, 0o600, "agent env file is not private");
+			const report = await run({ args: "key", cwd, home: root, env: { OPENROUTER_API_KEY: SECRET } });
+			assert.equal(report.level, "error");
+			assert.ok(report.lines.join("\n").includes("unknown"), report.lines.join("\n"));
+			assert.equal(existsSync(join(root, ".omp", "agent", ".env")), false, "wrote an agent env file");
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
@@ -200,8 +212,8 @@ async function main(): Promise<void> {
 			const cwd = join(root, "project");
 			mkdirSync(cwd, { recursive: true });
 			// A context without any `ui` member: anything that tried to prompt would throw.
-			await runSetupCommand("key", { cwd, env: { HOME: root }, exec: gitStub({ worktree: false }) });
-			await runSetupCommand("", { cwd, env: { HOME: root }, exec: gitStub({ worktree: false }) });
+			await runSetupCommand("enable", { cwd, env: { HOME: root }, exec: notARepository });
+			await runSetupCommand("", { cwd, env: { HOME: root }, exec: notARepository });
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
