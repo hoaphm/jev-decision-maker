@@ -6,12 +6,12 @@
  *       the oracle repair must pass every check, and the run primitives must work.
  *
  *   bun scripts/benchmark-decision-maker.ts
- *       Live run. `OPENROUTER_API_KEY` must be supplied by the operator in this process
- *       environment - sourcing it from a credential store is outside protocol and invalidates
- *       the batch (see the correction in docs/research/jev-decision-maker.md). The runner aborts
- *       before the first session when it is missing, and needs a usable main-model credential.
- *       Sessions run strictly in sequence (B/J/J/B per fixture); each one is a fresh temp
- *       workspace copied from the fixture seed.
+ *       Live run. The decision maker holds no credential of its own: arm J resolves the `openrouter`
+ *       credential through omp's own model registry, exactly as the deployed plugin does, so the batch
+ *       records `credentialSource: "omp"` instead of demanding an operator-exported variable. The runner
+ *       aborts before the first session when omp cannot resolve that credential, and needs a usable
+ *       main-model credential (`@default`). Sessions run strictly in sequence (B/J/J/B per fixture); each
+ *       one is a fresh temp workspace copied from the fixture seed.
  *
  * Arm B: same extension file loaded, JEV_DECISION_MAKER=0 (tool absent, no network).
  * Arm J: JEV_DECISION_MAKER=1 and the tool is offered.
@@ -698,8 +698,11 @@ function median(values: number[]): number {
 }
 
 async function benchmark(): Promise<number> {
-	if (!globalThis.process.env.OPENROUTER_API_KEY?.trim()) {
-		console.error("OPENROUTER_API_KEY is not set; the live benchmark was not started (no sessions spent).");
+	// Nothing is injected into the child environment: the plugin resolves the credential through omp, so
+	// the preflight only proves omp can resolve one. The value is never printed or recorded.
+	const credential = await runProcess(["omp", "token", "openrouter"], REPO, 30_000);
+	if (credential.code !== 0 || credential.stdout.trim().length === 0) {
+		console.error("omp cannot resolve an openrouter credential; the live benchmark was not started (no sessions spent).");
 		return 1;
 	}
 	const version = await runProcess(["omp", "--version"], REPO, 30_000);
@@ -769,6 +772,7 @@ async function benchmark(): Promise<number> {
 	const report = {
 		generatedAt: new Date().toISOString(),
 		ompVersion: version.stdout.trim(),
+		credentialSource: "omp",
 		protocol: {
 			fixtureSet: FIXTURES.map((fixture) => fixture.name),
 			order: ORDER,
