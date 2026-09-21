@@ -8,13 +8,13 @@
  * touches files, shell or the network beyond one inference call, and never grants authorization.
  *
  * Opt-in: the tool registers only when JEV_DECISION_MAKER=1, which `/setup-jev` can write into a
- * project `.env` or the agent `.env`. Credential: OPENROUTER_API_KEY from the environment (or that
- * agent `.env`, which omp autoloads) at call time — never persisted by the tool, never logged, never
- * sent anywhere except the Authorization header. `/setup-jev key` copies an already-exported key
- * there and never prints it. The status line reports readiness even when the tool is off.
+ * project `.env` or the agent `.env`. Credential: OMP's own provider configuration for `openrouter`,
+ * resolved through the extension context at call time - the decision maker stores none, reads none
+ * from the environment, and never logs or echoes one. Missing configuration answers
+ * `main`/`missing_key` without a request. The status line reports readiness even when the tool is off.
  */
 
-import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { SETUP_COMMAND, runSetupCommand } from "./setup-command.ts";
 
 export type CandidateKind = "read" | "edit" | "check";
@@ -65,10 +65,18 @@ export type DecideOptions = {
 	fetch?: typeof globalThis.fetch;
 	/** Shared across calls of one session; decremented synchronously per call. */
 	budget?: { remaining: number };
+	/**
+	 * Resolves the credential for this call. Production passes OMP's provider resolver, so the decision
+	 * maker holds no credential of its own: it never reads one from the environment or from a file, and
+	 * a missing or blank answer returns `main`/`missing_key` before any request.
+	 */
+	resolveApiKey?: () => Promise<string | undefined>;
 };
 
 export const DECISION_ENDPOINT = "https://openrouter.ai/api/v1/systemone";
 export const DECISION_MODEL = "typesafe/jev-1.13";
+/** OMP provider whose configured credential authorizes this endpoint. */
+export const OPENROUTER_PROVIDER = "openrouter";
 /** Reserved criteria added by the client; caller ids cannot collide with it. */
 export const DEFER_ID = "__defer__";
 export const CALL_LIMIT = 5;
@@ -324,7 +332,7 @@ export async function decide(input: DecisionInput, options: DecideOptions = {}):
 	const started = performance.now();
 	const prepared = prepare(input);
 	if (!prepared) return failure("invalid_input", started);
-	const apiKey = process.env.OPENROUTER_API_KEY?.trim();
+	const apiKey = (await options.resolveApiKey?.())?.trim();
 	if (!apiKey) return failure("missing_key", started);
 	const budget = options.budget;
 	if (budget) {
@@ -381,33 +389,46 @@ const TOOL_DESCRIPTION = [
 	"Call it only at a real branch point, with candidates drawn from the current task and current permissions. Never invent options to force a call, never call it for a step that is obvious or required, never call it to authorize an action: the answer is a suggestion, not approval, and never by itself permits a destructive, networked or account-changing step.",
 ].join("\n");
 
-/** The part of the extension context this module touches. */
-type StatusWriter = { ui: { setStatus(key: string, text: string | undefined): unknown } };
+/** The part of the extension context this module needs: a status slot and OMP's own credential view. */
+type SessionContext = Pick<ExtensionContext, "ui" | "modelRegistry" | "sessionManager">;
 
 export default function decisionMakerExtension(pi: ExtensionAPI): void {
 	const optedIn = process.env.JEV_DECISION_MAKER === "1";
 	const budget = { remaining: CALL_LIMIT };
 
+	/**
+	 * Presence only. `peekApiKey` is the cheap leg of the resolver cascade, so a lifecycle event can
+	 * never run a command-backed key program, refresh OAuth, or reach the network; the full resolver is
+	 * reserved for an actual call.
+	 */
+	const hasCredential = async (ctx: SessionContext): Promise<boolean> => {
+		try {
+			return Boolean(await ctx.modelRegistry.authStorage.peekApiKey(OPENROUTER_PROVIDER));
+		} catch {
+			return false;
+		}
+	};
+
 	// Registered even when opted out, so the line reports what the session can do rather than staying silent.
-	const refreshStatus = (ctx: StatusWriter): void => {
+	const refreshStatus = async (ctx: SessionContext): Promise<void> => {
 		const label = statusLabel({
 			optedIn,
-			hasKey: (process.env.OPENROUTER_API_KEY ?? "").trim().length > 0,
+			hasKey: await hasCredential(ctx),
 			toolActive: optedIn && pi.getActiveTools().includes(TOOL_NAME),
 		});
 		ctx.ui.setStatus(STATUS_KEY, STATUS_PREFIX + label);
 	};
 
-	pi.on("session_start", async (_event, ctx) => refreshStatus(ctx));
-	pi.on("session_switch", async (_event, ctx) => refreshStatus(ctx));
-	pi.on("session_branch", async (_event, ctx) => refreshStatus(ctx));
-	pi.on("session_tree", async (_event, ctx) => refreshStatus(ctx));
+	pi.on("session_start", async (_event, ctx) => await refreshStatus(ctx));
+	pi.on("session_switch", async (_event, ctx) => await refreshStatus(ctx));
+	pi.on("session_branch", async (_event, ctx) => await refreshStatus(ctx));
+	pi.on("session_tree", async (_event, ctx) => await refreshStatus(ctx));
 	// The host never clears a slot on its own, so releasing it is this extension's job.
 	pi.on("session_shutdown", async (_event, ctx) => ctx.ui.setStatus(STATUS_KEY, undefined));
 
 	// Registered whether or not the tool is on: this is the command a fresh session needs to enable it.
 	pi.registerCommand(SETUP_COMMAND, {
-		description: "Show or change the decision maker's enable switch and credential",
+		description: "Show or change the decision maker's enable switch",
 		handler: async (args, ctx) => {
 			const report = await runSetupCommand(args ?? "", {
 				cwd: ctx.cwd,
@@ -417,8 +438,10 @@ export default function decisionMakerExtension(pi: ExtensionAPI): void {
 					return { code: result.code ?? 1, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
 				},
 				toolActive: optedIn && pi.getActiveTools().includes(TOOL_NAME),
+				credentialPresent: () => hasCredential(ctx),
 			});
-			for (const line of report.lines) ctx.ui.notify(line, report.level);
+			// The report speaks "warn"; the UI spells the same severity "warning".
+			for (const line of report.lines) ctx.ui.notify(line, report.level === "warn" ? "warning" : report.level);
 		},
 	});
 
@@ -444,9 +467,16 @@ export default function decisionMakerExtension(pi: ExtensionAPI): void {
 				}),
 			),
 		}),
-		async execute(_toolCallId: string, params: DecisionInput, signal?: AbortSignal, _onUpdate?: unknown, ctx?: StatusWriter) {
-			const result = await decide(params, { signal: signal ?? undefined, budget });
-			if (ctx) refreshStatus(ctx);
+		async execute(_toolCallId: string, params: DecisionInput, signal?: AbortSignal, _onUpdate?: unknown, ctx?: SessionContext) {
+			const result = await decide(params, {
+				signal: signal ?? undefined,
+				budget,
+				resolveApiKey: async () =>
+					await ctx?.modelRegistry.getApiKeyForProvider(OPENROUTER_PROVIDER, ctx.sessionManager.getSessionId(), {
+						signal,
+					}),
+			});
+			if (ctx) await refreshStatus(ctx);
 			return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
 		},
 		onSession(event: unknown) {
