@@ -43,7 +43,7 @@ writes the symlink into the user root instead.
 
 ## Runtime behavior
 
-The extension remains opt-in: it registers `decision_maker` only for `JEV_DECISION_MAKER=1`. It reads only `OPENROUTER_API_KEY` from the process environment at decision time. Missing credentials return `main/missing_key`; they are never retrieved from OMP stores, files, argv, prompts, or logs.
+The extension remains opt-in: it registers `decision_maker` only for `JEV_DECISION_MAKER=1`. The credential is OMP's, not the extension's: every call resolves the `openrouter` provider credential through `ctx.modelRegistry.getApiKeyForProvider`, and the extension never reads one from the environment, a file, argv, a prompt, or a log. Missing credentials return `main/missing_key` without a request. The budget is claimed before that resolution, so a call the quota already refuses performs no credential work.
 
 The factory owns `{ remaining: 5 }`. Only `start`, `switch`, `branch`, and `tree` reset it to five. Prompt, retry, compaction, TTSR, todo, and shutdown events do not reset quota.
 
@@ -66,9 +66,9 @@ the line describes the session instead of staying silent. Rendered text is `◆ 
 
 | Condition | Label |
 | --- | --- |
-| opted in, key present, tool in the active set | `JEV on` |
-| opted in, `OPENROUTER_API_KEY` missing or blank | `JEV no key` |
-| opted in with key, tool not active | `JEV inactive` |
+| opted in, OMP resolves a credential, tool in the active set | `JEV on` |
+| opted in, OMP reports no `openrouter` credential | `JEV no key` |
+| opted in with a credential, tool not active | `JEV inactive` |
 | not opted in | `JEV off` |
 
 omp strips ANSI from status text before drawing, so no colour is attempted and the glyph carries the
@@ -87,30 +87,32 @@ discoverable way for a fresh session to turn the tool on:
 | Argument | Effect |
 | --- | --- |
 | none | reports the effective switch, both env files and their contents, credential presence, tool activeness |
-| `enable` / `disable` | writes/removes `JEV_DECISION_MAKER` in `<cwd>/.env` |
+| `enable` / `disable` | writes/removes `JEV_DECISION_MAKER` in `<cwd>/.env`, preparing one exact Git ignore rule first |
 | `enable --global` / `disable --global` | same, in `<agent dir>/.env` |
-| `key` | copies an already-exported `OPENROUTER_API_KEY` into `<agent dir>/.env`, mode 600, never printed |
 
 Measured constraints (omp 18.2.6, isolated HOME, RPC only, no inference):
 
 - extension UI has no masked input, and provider-login secret prompts are rejected in RPC, so the command
-  never asks for the credential - it copies one from the environment or prints the shell line to run;
+  never asks for a credential at all - the credential belongs to omp's own provider configuration;
 - a launch-directory `.env` is read from that exact directory, never from an ancestor, while
   `<agent dir>/.env` is read from any working directory;
 - the process environment beats both files, which keeps `JEV_DECISION_MAKER=0` authoritative;
 - launching omp with `cwd == $HOME` makes omp switch to a temp directory, so the session cwd - and with it
   the project `.env` target - is not the home directory; the harness must therefore drive the command from
   a real project subdirectory;
-- `enable` checks `git check-ignore` and refuses to write a `.env` that git would track;
+- `enable` refuses a `.env` git already tracks, otherwise ensures the worktree `.gitignore` holds one
+  exact launch-directory rule and re-checks `git check-ignore` before writing; every Git call after the
+  root probe runs with `-C <root>`, because `pi.exec` starts Git in the launch directory;
 - writes go through a temp file and `rename`, and merge instead of clobbering unrelated lines.
 
 ## Verification
 
 1. `bun tests/decision-maker.test.ts` verifies all existing decision guards and that the only budget reset reasons are `start`, `switch`, `branch`, and `tree`.
 2. `bun scripts/benchmark-decision-maker.ts --self-check` verifies synthetic fixture seeds/oracles without starting OMP or inference.
-3. `bun tests/plugin-install.test.ts` creates temporary XDG data/state/cache roots, links this package, starts OMP in RPC mode, calls only `get_state`, and asserts `dumpTools` includes `decision_maker` while no `agent_start` event exists. Temporary state is removed in `finally`.
+3. `bun tests/setup-command.test.ts` covers the merge/temp-file write, the credential-free report, and the project Git guard against real `git`: a repository created at `project/` while the session launches from `project/nested`, proving the root-relative ignore rule is written once and a tracked `.env` is refused with no worktree mutation.
+4. `bun tests/plugin-install.test.ts` creates temporary XDG data/state/cache roots, links this package, starts OMP in RPC mode, calls only `get_state`, and asserts `dumpTools` includes `decision_maker` while no `agent_start` event exists. Temporary state is removed in `finally`.
 
-4. The same `probeSession` asserts an `extension_ui_request` frame with `statusKey: "jev"` whose text ends
+5. The same `probeSession` asserts an `extension_ui_request` frame with `statusKey: "jev"` whose text ends
    with the expected label for off / no-key / ready, and that no frame arrives after `plugin uninstall`.
    Rendering itself was confirmed out of band in a pty-backed interactive session in the isolated HOME:
    `◆ JEV on` with the switch set, `◆ JEV off` without it.
@@ -173,9 +175,10 @@ back to `process.env.OPENROUTER_API_KEY` itself. An unavailable resolver or miss
 version floor. An isolated RPC probe on the installed OMP 17.3.2 host confirmed that this resolver also
 returns an exported `OPENROUTER_API_KEY`; the historical 18.2.6 measurements remain version-specific.
 
-The status line uses the cheap `authStorage.peekApiKey("openrouter")` presence check. It never invokes
-command-backed credential programs, refreshes OAuth, or performs a network request during session events;
-full credential resolution occurs only when the decision maker executes.
+The status line uses the cheap presence path: `modelRegistry.hasCommandBackedApiKey("openrouter")` first, then
+`authStorage.peekApiKey("openrouter")`. It never invokes command-backed credential programs, refreshes OAuth,
+or performs a network request during session events; full credential resolution occurs only for a call the
+quota admits.
 
 `/setup-jev key` is removed. `/setup-jev enable` remains a project-local opt-in: it first refuses if the
 launch-directory `.env` is tracked, without mutating the worktree. If the file is not ignored, it adds an

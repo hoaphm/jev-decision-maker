@@ -104,18 +104,24 @@ type RegistrationOptions = {
 	optIn?: string;
 	/** What OMP's cheap presence probe reports; `undefined` means no credential is configured. */
 	storedKey?: string;
+	/** Whether a `models.yml` command-backed key is configured for the provider. */
+	commandBackedKey?: boolean;
 	/** Makes the full resolver throw, which proves a status refresh never reaches for it. */
 	resolverThrows?: boolean;
 	activeTools?: string[];
 };
 
-/** A session-context stub: it records status writes and answers both credential lookups. */
+/** A session-context stub: it records status writes and answers every credential lookup. */
 function sessionStub(options: RegistrationOptions = {}) {
 	const writes: Array<[string, string | undefined]> = [];
 	const calls = { peek: 0, resolve: 0 };
 	const ctx = {
 		ui: { setStatus: (key: string, text: string | undefined) => void writes.push([key, text]) },
 		modelRegistry: {
+			hasCommandBackedApiKey: (provider: string) => {
+				if (provider !== "openrouter") throw new Error(`unexpected provider: ${provider}`);
+				return options.commandBackedKey === true;
+			},
 			authStorage: {
 				peekApiKey: async (provider: string) => {
 					if (provider !== "openrouter") throw new Error(`unexpected provider: ${provider}`);
@@ -486,10 +492,10 @@ async function main(): Promise<void> {
 				assert.equal(afterSwitch.details.reason, "selected");
 				assert.equal(calls.length, CALL_LIMIT + 1);
 				// One refresh per call, so the line tracks what just happened; every refresh peeks, and
-				// only the request path reaches the full resolver.
+				// only a call that could actually be sent reaches the full resolver.
 				assert.equal(stub.writes.length, 8, JSON.stringify(stub.writes));
 				assert.equal(stub.calls.peek, stub.writes.length, "a status refresh resolved the credential the slow way");
-				assert.equal(stub.calls.resolve, 8, "one full resolution per execute");
+				assert.equal(stub.calls.resolve, CALL_LIMIT + 1, "an over-limit call still resolved a credential");
 			});
 		} finally {
 			globalThis.fetch = realFetch;
@@ -546,6 +552,18 @@ async function main(): Promise<void> {
 		assert.equal(stub.writes.length, STATUS_EVENTS.length, "one refresh per lifecycle event");
 		assert.equal(stub.calls.resolve, 0, "a status refresh reached the full resolver");
 		assert.equal(stub.calls.peek, STATUS_EVENTS.length);
+	});
+
+	await test("a command-backed key still reports readiness without touching authStorage", async () => {
+		const registration = await withRegistration(
+			{ optIn: "1", commandBackedKey: true, resolverThrows: true, activeTools: ["read", "decision_maker"] },
+			async (registered) => registered,
+		);
+		const stub = sessionStub({ commandBackedKey: true, resolverThrows: true });
+		await statusWrites(registration, "session_start", stub);
+		assert.ok(stub.writes.at(-1)?.[1]?.endsWith("JEV on"), JSON.stringify(stub.writes));
+		assert.equal(stub.calls.peek, 0, "a command-backed key needs no stored-credential lookup");
+		assert.equal(stub.calls.resolve, 0, "a status refresh reached the full resolver");
 	});
 
 	await test("the status line exists when opted out and clears at shutdown", () =>

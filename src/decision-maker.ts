@@ -332,13 +332,15 @@ export async function decide(input: DecisionInput, options: DecideOptions = {}):
 	const started = performance.now();
 	const prepared = prepare(input);
 	if (!prepared) return failure("invalid_input", started);
-	const apiKey = (await options.resolveApiKey?.())?.trim();
-	if (!apiKey) return failure("missing_key", started);
 	const budget = options.budget;
 	if (budget) {
+		// Claimed before any credential work: a request that will never be sent must not run the
+		// provider resolver, which can execute a command-backed key program or refresh OAuth.
 		if (budget.remaining <= 0) return failure("call_limit", started);
 		budget.remaining -= 1;
 	}
+	const apiKey = (await options.resolveApiKey?.())?.trim();
+	if (!apiKey) return failure("missing_key", started);
 	const caller = options.signal;
 	if (caller?.aborted) return failure("cancelled", started);
 
@@ -402,6 +404,9 @@ export default function decisionMakerExtension(pi: ExtensionAPI): void {
 	 * reserved for an actual call.
 	 */
 	const hasCredential = async (ctx: SessionContext): Promise<boolean> => {
+		// A `models.yml` command-backed key lives outside authStorage and the call path checks it first,
+		// so the label must check it too or it would contradict a call that then succeeds.
+		if (ctx.modelRegistry.hasCommandBackedApiKey(OPENROUTER_PROVIDER)) return true;
 		try {
 			return Boolean(await ctx.modelRegistry.authStorage.peekApiKey(OPENROUTER_PROVIDER));
 		} catch {
