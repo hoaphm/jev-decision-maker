@@ -26,6 +26,10 @@ _Avoid_: fallback, escalation, defer-to-human
 An activation choice that enables the decision maker in one Git worktree without enabling it in other worktrees.
 _Avoid_: machine-wide enablement
 
+**Global opt-in**:
+An explicit activation choice that enables the decision maker in every OMP session using the same agent configuration.
+_Avoid_: default activation
+
 **OMP-managed credential**:
 An OpenRouter credential resolved by OMP's provider configuration and exposed to an extension at runtime, rather than stored or configured by the decision maker.
 _Avoid_: plugin-managed key, duplicated credential

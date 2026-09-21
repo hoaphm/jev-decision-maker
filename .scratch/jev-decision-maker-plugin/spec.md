@@ -173,12 +173,23 @@ back to `process.env.OPENROUTER_API_KEY` itself. An unavailable resolver or miss
 version floor. An isolated RPC probe on the installed OMP 17.3.2 host confirmed that this resolver also
 returns an exported `OPENROUTER_API_KEY`; the historical 18.2.6 measurements remain version-specific.
 
+The status line uses the cheap `authStorage.peekApiKey("openrouter")` presence check. It never invokes
+command-backed credential programs, refreshes OAuth, or performs a network request during session events;
+full credential resolution occurs only when the decision maker executes.
+
 `/setup-jev key` is removed. `/setup-jev enable` remains a project-local opt-in: it first refuses if the
 launch-directory `.env` is tracked, without mutating the worktree. If the file is not ignored, it adds an
 exact launch-directory `.env` pattern to the worktree-root `.gitignore` only when that pattern is absent,
 then verifies `git check-ignore`. An ineffective existing rule is an error; no switch is written. Repeated
 enables do not duplicate ignore patterns.
 
+`enable --global` and `disable --global` remain unchanged as explicit global opt-ins. The unflagged
+commands retain the project-local behavior above.
+
 README, AGENTS.md, setup and plugin integration tests must describe and prove this contract. The historical
 12-session batch remains invalid for acceptance: this policy change does not retroactively establish that
 batch as evidence for the new implementation.
+
+The exported-environment resolver probe ran in an isolated HOME. A separate stored-credential presence
+probe ran under the operator's real HOME without exporting `OPENROUTER_API_KEY`; because it lacked a
+pre-probe state fingerprint, it is not verification evidence and must not be repeated against real state.
