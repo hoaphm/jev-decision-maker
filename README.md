@@ -47,49 +47,50 @@ extensions:
 reports success and writes the symlink into the user root (`~/.omp/plugins/node_modules/...`) instead,
 so either use the project config above or accept a user-scope link.
 
-Enable check: start omp in this checkout with both variables and read the status line. `◆ JEV on` means
-a call can reach the model; `◆ JEV no key` means the switch is set but the credential is not in the
-environment; `◆ JEV off` means the project config did not load.
+Enable check: start omp in this checkout and read the status line. `◆ JEV on` means a call can reach the
+model; `◆ JEV no key` means the switch is set but omp has no OpenRouter credential configured;
+`◆ JEV off` means the project config did not load.
 
 ## Setup command
 
 `/setup-jev` is registered whether or not the tool is enabled, so a fresh session can turn it on:
 
 ```sh
-/setup-jev                    # switch, both env files, credential presence, whether the tool is active
+/setup-jev                    # switch, both env files, whether omp can resolve a credential, tool activeness
 /setup-jev enable              # writes JEV_DECISION_MAKER=1 into ./.env (this checkout only)
 /setup-jev enable --global     # ...into ~/.omp/agent/.env, which applies in every directory
 /setup-jev disable [--global]
-/setup-jev key                 # copies OPENROUTER_API_KEY from this session into ~/.omp/agent/.env
 ```
 
 Measured rules the command follows:
 
-- The credential is never typed into omp. omp's extension UI has no masked input, so a key typed into a
-  prompt would land in the transcript; `/setup-jev key` only copies a key you already exported
-  (`export OPENROUTER_API_KEY=...`), stores it with mode 600 in `~/.omp/agent/.env`, and never prints the
-  value. Without one it prints the shell line to run instead.
+- The command owns activation only, never a credential. `/setup-jev` reports whether omp can resolve an
+  OpenRouter key for the session; configure that key in omp itself (its provider configuration or an
+  exported `OPENROUTER_API_KEY` at launch), not through this plugin.
 - A project `.env` is read from the launch directory exactly - omp does not walk parent directories, so
   `enable` from a checkout still needs `--global` when you launch from a subdirectory. The command says so
   when it writes.
-- `enable` refuses to write a `.env` that git would track: it runs `git check-ignore` first.
+- `enable` keeps a project switch out of git without mutating anything on a refusal: it refuses when the
+  target `.env` is already tracked, otherwise it ensures the worktree `.gitignore` holds one exact
+  launch-directory rule and re-checks `git check-ignore` before writing. `disable` leaves that rule alone.
 - The process environment always wins over a `.env`. That is what keeps `JEV_DECISION_MAKER=0` - and the
   benchmark's baseline arm - authoritative.
 
 ## Enable
 
-The tool is registered only for sessions started with both variables:
+The tool is registered only for sessions started with the switch:
 
 ```sh
-JEV_DECISION_MAKER=1 OPENROUTER_API_KEY=... omp
+JEV_DECISION_MAKER=1 omp
 ```
 
-`OPENROUTER_API_KEY` is read from the environment at call time. It is never persisted, never logged,
-never echoed into tool output, and sent nowhere except the `Authorization` header. Keep it out of
-argv, prompts and fixtures: a key that reaches a command line or a prompt is visible to process
-listings and transcripts. Missing or blank key answers `main` / `missing_key` without a request.
-Every other failure also returns control to the agent: nothing is retried, no endpoint is switched,
-and no other model is substituted.
+`JEV_DECISION_MAKER` is the one variable this plugin reads from the environment, and only at registration.
+The credential is not the plugin's: every call resolves the `openrouter` credential from omp's model
+registry and sends it nowhere except the `Authorization` header - the plugin stores none, logs none, and
+echoes none into tool output. Configure it in omp (an exported `OPENROUTER_API_KEY` is one of the sources
+omp checks). Missing or blank resolution answers `main` / `missing_key` without a request. Every other
+failure also returns control to the agent: nothing is retried, no endpoint is switched, and no other model
+is substituted.
 
 ## Status line
 
@@ -98,10 +99,14 @@ the session ends. It reports what the session *can* do, never what it is *allowe
 
 | Label | Meaning |
 | --- | --- |
-| `◆ JEV on` | opted in, key present, tool active - a call can reach the model |
-| `◆ JEV no key` | opted in but `OPENROUTER_API_KEY` missing - every call answers `main`/`missing_key` |
-| `◆ JEV inactive` | opted in with a key, but the tool is not in this session's active tool set |
+| `◆ JEV on` | opted in, omp reports a credential, tool active - a call can reach the model |
+| `◆ JEV no key` | opted in but omp has no `openrouter` credential - every call answers `main`/`missing_key` |
+| `◆ JEV inactive` | opted in with a credential, but the tool is not in this session's active tool set |
 | `◆ JEV off` | not opted in - no tool is registered and nothing is ever sent |
+
+The credential check is a presence peek only, so a lifecycle event can never run a command-backed key
+program, refresh an OAuth token, or reach the network; the full provider resolver runs only for an actual
+call.
 
 omp strips ANSI from status text before rendering, so the marker is a plain glyph and any colour comes
 from the status line itself. The label refreshes on session start/switch/branch/tree and after every
@@ -135,12 +140,14 @@ but still serialises each write as an `extension_ui_request` frame.
 
 ```sh
 bun tests/decision-maker.test.ts
+bun tests/setup-command.test.ts
 bun tests/plugin-install.test.ts
 bun scripts/benchmark-decision-maker.ts --self-check
 ```
 
-All three run offline and start no model turn. The live benchmark (`bun scripts/benchmark-decision-maker.ts`)
-is the one that spends money: 12 omp sessions, and it needs `OPENROUTER_API_KEY` in the environment.
+All four run offline and start no model turn. The live benchmark (`bun scripts/benchmark-decision-maker.ts`)
+is the one that spends money: 12 omp sessions, and the benchmark script itself needs
+`OPENROUTER_API_KEY` in the environment.
 
 The rendered status line itself was verified out of band in a real interactive session (a pty under an
 isolated HOME with the plugin linked): `◆ JEV on` with the switch set, `◆ JEV off` without it. The

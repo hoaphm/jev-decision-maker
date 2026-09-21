@@ -53,8 +53,8 @@ function fingerprint(dir: string): string {
 function isolatedEnv(options: { jevDecisionMaker?: string; openRouterKey?: string } = {}): Record<string, string> {
 	// A whitelist, not the ambient environment: no real credential can reach the child. The
 	// placeholder model key only exists to get session startup past the "no models" gate, and the
-	// placeholder OpenRouter key only exercises the readiness label - no prompt is ever sent, so
-	// nothing can call a provider.
+	// placeholder OpenRouter key only exercises the readiness label through omp's own credential
+	// lookup - no prompt is ever sent, so nothing can call a provider.
 	const env: Record<string, string> = {
 		HOME,
 		PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
@@ -335,15 +335,22 @@ async function main(): Promise<void> {
 					"disable left the switch behind",
 				);
 
-				const secret = "sk-or-v1-plugin-test-placeholder";
-				const keyed = await driveCommands(PROJECT, ["/setup-jev key"], secret);
+				// The command owns no credential: the removed subcommand is rejected and writes nothing.
+				const keyed = await driveCommands(PROJECT, ["/setup-jev key"], "sk-or-v1-plugin-test-placeholder");
 				assert.equal(keyed.agentStarted, false, "the probe started an agent turn");
+				assert.ok(
+					keyed.notifies.some((line) => line.includes("unknown")),
+					`/setup-jev key was still accepted: ${JSON.stringify(keyed.notifies)}`,
+				);
+				assert.equal(existsSync(join(HOME, ".omp", "agent", ".env")), false, "the command wrote an agent env file");
+
+				const global = await driveCommands(PROJECT, ["/setup-jev enable --global", "/setup-jev disable --global"]);
+				assert.equal(global.agentStarted, false, "the probe started an agent turn");
 				const agentEnv = join(HOME, ".omp", "agent", ".env");
-				assert.ok(existsSync(agentEnv), "key did not write the agent env file");
-				assert.ok(readFileSync(agentEnv, "utf8").includes(secret), "the credential was not stored");
-				for (const line of keyed.notifies) {
-					assert.equal(line.includes(secret), false, `the command echoed the credential: ${line}`);
-				}
+				assert.ok(existsSync(agentEnv), "--global did not write the agent env file");
+				const agentText = readFileSync(agentEnv, "utf8");
+				assert.equal(agentText.includes("JEV_DECISION_MAKER=1"), false, "disable --global left the switch behind");
+				assert.equal(agentText.includes("OPENROUTER_API_KEY"), false, "the agent env file must not hold a credential");
 			} finally {
 				// The command writes real dotenv files (that is the feature); later checks must not inherit them.
 				for (const path of [join(PROJECT, ".env"), join(HOME, ".omp", "agent", ".env")]) {
@@ -352,20 +359,21 @@ async function main(): Promise<void> {
 			}
 		});
 
-		await test("the README documents install paths, both variables and the labels", () => {
+		await test("the README documents install, activation and the labels", () => {
 			const readme = readFileSync(join(REPO, "README.md"), "utf8");
 			for (const fact of [
 				"omp plugin link",
 				"omp plugin install",
 				"setup-jev",
 				"JEV_DECISION_MAKER",
-				"OPENROUTER_API_KEY",
+				"enable --global",
 				"◆ JEV on",
 				"JEV no key",
 				"JEV inactive",
 			]) {
 				assert.ok(readme.includes(fact), `README does not document ${fact}`);
 			}
+			assert.equal(readme.includes("/setup-jev key"), false, "the README still offers the removed key subcommand");
 		});
 
 		await test("the installed plugin writes a readiness status line", async () => {
@@ -381,13 +389,6 @@ async function main(): Promise<void> {
 				for (const [, text] of ours) {
 					assert.ok(text?.endsWith(testCase.label), `${testCase.name}: "${text}" should end with "${testCase.label}"`);
 				}
-			}
-		});
-
-		await test("the README states both install paths and the two variables", () => {
-			const readme = readFileSync(join(REPO, "README.md"), "utf8");
-			for (const fact of ["omp plugin link", "omp plugin install", "JEV_DECISION_MAKER", "OPENROUTER_API_KEY"]) {
-				assert.ok(readme.includes(fact), `README does not document ${fact}`);
 			}
 		});
 
