@@ -172,8 +172,9 @@ The decision maker remains opt-in through `JEV_DECISION_MAKER=1`, but resolves i
 through OMP's runtime `modelRegistry` for provider `openrouter`. It does not read, write, log, or fall
 back to `process.env.OPENROUTER_API_KEY` itself. An unavailable resolver or missing credential returns
 `main/missing_key` without a request. The extension performs a capability check rather than claiming a
-version floor. An isolated RPC probe on the installed OMP 17.3.2 host confirmed that this resolver also
-returns an exported `OPENROUTER_API_KEY`; the historical 18.2.6 measurements remain version-specific.
+version floor. The isolated resolver probe ran on the installed OMP 17.3.2 and confirmed that this resolver
+also returns an exported `OPENROUTER_API_KEY`; the isolated plugin-install proof was then re-run green on
+OMP 18.2.6. The historical 18.2.6 benchmark measurements remain version-specific.
 
 The status line uses the cheap presence path: `modelRegistry.hasCommandBackedApiKey("openrouter")` first, then
 `authStorage.peekApiKey("openrouter")`. It never invokes command-backed credential programs, refreshes OAuth,
