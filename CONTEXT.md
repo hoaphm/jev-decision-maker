@@ -21,3 +21,11 @@ _Avoid_: fork, decision node, choice
 Refusing to select and handing the reasoning back to the main agent, without substituting another
 model's answer for Jev's.
 _Avoid_: fallback, escalation, defer-to-human
+
+**Project-local opt-in**:
+An activation choice that enables the decision maker in one Git worktree without enabling it in other worktrees.
+_Avoid_: machine-wide enablement
+
+**OMP-managed credential**:
+An OpenRouter credential resolved by OMP's provider configuration and exposed to an extension at runtime, rather than stored or configured by the decision maker.
+_Avoid_: plugin-managed key, duplicated credential

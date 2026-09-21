@@ -160,3 +160,25 @@ Requested by the owner later in the same effort, so they supersede the matching 
   lock entry afterwards.
 - Status line: added on request, sized by the Q&A round (readiness only, no runtime toggle, no cost
   counters), and it does not change what the tool sends or authorises.
+
+## Configuration amendment
+
+This accepted amendment supersedes the credential and setup-command requirements in **Runtime behavior**
+and **Setup command** above.
+
+The decision maker remains opt-in through `JEV_DECISION_MAKER=1`, but resolves its OpenRouter credential
+through OMP's runtime `modelRegistry` for provider `openrouter`. It does not read, write, log, or fall
+back to `process.env.OPENROUTER_API_KEY` itself. An unavailable resolver or missing credential returns
+`main/missing_key` without a request. The extension performs a capability check rather than claiming a
+version floor. An isolated RPC probe on the installed OMP 17.3.2 host confirmed that this resolver also
+returns an exported `OPENROUTER_API_KEY`; the historical 18.2.6 measurements remain version-specific.
+
+`/setup-jev key` is removed. `/setup-jev enable` remains a project-local opt-in: it first refuses if the
+launch-directory `.env` is tracked, without mutating the worktree. If the file is not ignored, it adds an
+exact launch-directory `.env` pattern to the worktree-root `.gitignore` only when that pattern is absent,
+then verifies `git check-ignore`. An ineffective existing rule is an error; no switch is written. Repeated
+enables do not duplicate ignore patterns.
+
+README, AGENTS.md, setup and plugin integration tests must describe and prove this contract. The historical
+12-session batch remains invalid for acceptance: this policy change does not retroactively establish that
+batch as evidence for the new implementation.
