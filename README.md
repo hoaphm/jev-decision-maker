@@ -1,9 +1,10 @@
 # JEV Decision Maker
 
 An omp plugin that adds one tool: `decision_maker`. At a coding/debug branch point the main agent
-supplies 2-5 candidate next steps and a TypeSafe System One model (Jev, through OpenRouter) picks
-one. The tool executes nothing, writes no code and grants no permission; a `main` answer hands the
-decision straight back to the agent.
+supplies 2-5 candidate next steps and a TypeSafe System One model (Jev, through OpenRouter) either
+picks one (`mode: "select"`) or rates them all against one rubric (`mode: "score"`) - in a single
+request either way. The tool executes nothing, writes no code and grants no permission; a `main`
+answer hands the decision straight back to the agent.
 
 ## Install
 
@@ -47,9 +48,56 @@ extensions:
 reports success and writes the symlink into the user root (`~/.omp/plugins/node_modules/...`) instead,
 so either use the project config above or accept a user-scope link.
 
-Enable check: start omp in this checkout and read the status line. `◆ JEV on` means a call can reach the
-model; `◆ JEV no key` means the switch is set but omp has no OpenRouter credential configured;
-`◆ JEV off` means the project config did not load.
+## Modes
+
+One call is one request. `mode` is required and has no default.
+
+`select` picks the best next step from 2-5 candidates, each `{id, kind, action, expected}`:
+
+```json
+{
+  "mode": "select",
+  "goal": "Fix the shared expiry comparison",
+  "state": "The seeded helper serves a value exactly at expiresAt; both callers route through it.",
+  "candidates": [
+    {"id": "repair", "kind": "edit", "action": "Change > to >= in the shared helper", "expected": "The boundary case returns the default"},
+    {"id": "inspect", "kind": "read", "action": "Read both callers", "expected": "Both callers are confirmed to share the helper"}
+  ]
+}
+```
+
+`score` rates every candidate against one ordered rubric, worst level first. The state is sent once and
+each candidate gets its own question inside that same request:
+
+```json
+{
+  "mode": "score",
+  "goal": "Choose the cache repair that preserves the stated contract",
+  "state": "Tenants can share ids; undefined is a valid cached value; a throwing loader must not cache.",
+  "candidates": [
+    {"id": "tuple-key", "kind": "edit", "action": "Key on JSON.stringify([tenantId, id])", "expected": "Tenant/id pairs stop sharing entries"},
+    {"id": "colon-key", "kind": "edit", "action": "Join tenant and id with a colon", "expected": "One key per tenant/id pair"}
+  ],
+  "rubric": ["Contradicts a stated requirement", "Required behaviour left unspecified", "Directly supported"]
+}
+```
+
+Answers are typed, never prose:
+
+| Answer | What it means |
+| --- | --- |
+| `{"status":"selected","candidateId":"repair","probability":0.96,"confidence":0.93}` | carry that candidate out with your normal tools |
+| `{"status":"scored","scores":[{"candidateId":"tuple-key","score":2,"probabilities":{"0":0,"1":0,"2":1},"confidence":1}]}` | every candidate rated; nothing was chosen for you |
+| `{"status":"main","reason":"deferred" \| "uncertain" \| "missing_key" \| ...}` | the decision is back with the agent |
+
+`score` is the probability-weighted rubric index (`0 .. rubric.length - 1`). It orders candidates
+against *that* rubric; it is not a probability that a candidate is correct and it does not compare
+across different rubrics. `confidence` is computed from the shape of the distribution the answer
+already carries, so it is a second look at the same numbers, not independent evidence.
+
+
+The status line tells you what the session can do before any call; see [Status line](#status-line) for the
+four labels and what they do and do not promise.
 
 ## Setup command
 
@@ -99,7 +147,7 @@ the session ends. It reports what the session *can* do, never what it is *allowe
 
 | Label | Meaning |
 | --- | --- |
-| `◆ JEV on` | opted in, omp reports a credential, tool active - a call can reach the model |
+| `◆ JEV on` | opted in, omp reports a credential, tool active - readiness only, not proof that the endpoint answered |
 | `◆ JEV no key` | opted in but omp has no `openrouter` credential - every call answers `main`/`missing_key` |
 | `◆ JEV inactive` | opted in with a credential, but the tool is not in this session's active tool set |
 | `◆ JEV off` | not opted in - no tool is registered and nothing is ever sent |
@@ -115,13 +163,27 @@ but still serialises each write as an `extension_ui_request` frame.
 
 ## Bounds
 
-- One request per call, 3 s timeout, no retries, at most 5 calls per session.
-- A request carries only what the agent passes (goal, evidence, candidates) and is capped at 24 KiB.
-  Responses are validated — model, provider, exact criteria keys, distribution summing to 1, unique
-  maximum — before anything is reported; an invalid answer becomes `main`.
-- `read` candidates need `p >= 0.90`; `edit` and `check` need `p >= 0.95`. These are experimental
-  gates, not correctness or safety guarantees. The answer is a suggestion, never authorization: it
-  does not approve a destructive, networked or account-changing action.
+- One request per call, whichever mode it uses: a 5-candidate `score` batch is still one request and
+  one slot of the 5 calls per session. 3 s timeout, no retries.
+- The 3 s deadline covers the credential lookup, the request and the body read. A provider resolver
+  that hangs, throws or ignores cancellation ends the call as `timeout`, `missing_key` or `cancelled`
+  - it cannot hold the tool open, and a credential that arrives late never sends a request. A
+  `models.yml` key that shells out (`!command`) therefore shares that same 3 s: a key program slower
+  than that turns every call into `main`/`timeout` until it is replaced with a literal key.
+- A request carries only what the agent passes (goal, evidence, candidates, rubric) and is capped at
+  24 KiB; a rubric is 2-5 levels. Responses are validated - model, provider, exactly the questions
+  that were asked, distributions summing to 1, and a score matching its own distribution - before
+  anything is reported. One bad answer voids the whole batch: there is no partial success.
+- `select` needs `p >= 0.90` for a `read` candidate and `p >= 0.41` for `edit`/`check`: measured, not
+  guessed (see `docs/adr/0002-measured-probability-thresholds.md`). The old 0.95 gates were starving the
+  tool - `edit` committed 3 of 27 correct picks - and the loosening drops the risky `edit` gate below the
+  safe `read` one, which is a property of the fixture set, not a policy. They are still experimental gates,
+  not correctness or safety guarantees. Naming one of several equal maxima comes
+  back as `main`/`uncertain` with the distribution kept rather than as a malformed answer.
+- The answer is a suggestion, never authorization: it does not approve a destructive, networked or
+  account-changing action, and it is not a test oracle - a deterministic check still outranks it.
+  Text from files, logs or issues that the agent puts in `state` is untrusted input; the wording in
+  the prompt lowers the risk of being steered by it, it is not a security boundary.
 - Candidates are limited to read/edit/check steps, and the tool itself has no filesystem or shell
   access, so it cannot widen what the session is allowed to do.
 
@@ -146,8 +208,9 @@ bun scripts/benchmark-decision-maker.ts --self-check
 ```
 
 All four run offline and start no model turn. The live benchmark (`bun scripts/benchmark-decision-maker.ts`)
-is the one that spends money: 12 omp sessions, and the benchmark script itself needs
-`OPENROUTER_API_KEY` in the environment.
+is the one that spends money: 12 omp sessions. It holds no credential of its own - the plugin resolves
+the `openrouter` credential through omp's provider configuration, so configure it in omp (one of the
+sources omp checks is an exported `OPENROUTER_API_KEY`).
 
 The rendered status line itself was verified out of band in a real interactive session (a pty under an
 isolated HOME with the plugin linked): `◆ JEV on` with the switch set, `◆ JEV off` without it. The
@@ -156,7 +219,46 @@ automated check covers the same labels through RPC, where omp serialises `setSta
 
 ## Measurement status
 
-The speed-up question is unanswered. The first measured batch never called the tool — its three
-fixtures had no real branch point — and its credential handling fell outside the approved scope, so
-it is recorded as invalid for acceptance rather than as a result. See
-`docs/research/jev-decision-maker.md`.
+Two batches have run, and neither shows the tool paying for itself.
+
+- The first (`docs/research/jev-decision-maker.md`) never called the tool: its fixtures had no real
+  branch point, and its credential handling fell outside the approved scope, so it is recorded as
+  invalid for acceptance rather than as a result.
+- The second ran 12 sessions with the baseline arm interleaved, on two judgement fixtures. What it
+  actually exercised: `score` was called **once** (`patch-shortlist-2J`) and worked - one request, five
+  candidates, one rubric, 636 ms, $0.000063, and it ranked the intended repair first (3.19 vs 0.57).
+  `select` was exercised only by the smoke's direct `decide()` call (1 request, 1.001 s, $0.000026,
+  chose the intended `cache-identity`), never through the tool inside a session: `diagnostic-selection`
+  had zero calls in all six sessions, which is the designed outcome for a task whose evidence already
+  excludes the other options.
+- Quality is therefore a ceiling, not a result: both arms answered correctly in all 12 sessions
+  (the main model solved both fixtures alone), and 5 of 6 treatment sessions never called the tool, so
+  each median time ratio is computed over pairs where JEV contributed nothing - no JEV effect is
+  estimable here. The one session that did call was 2.02x its baseline pair, but JEV's own round-trip
+  was 636 ms of a +22.2 s difference, so that is agent-side, not tool-side.
+- The mechanism claim cannot be made from this batch: sessions ran with `--no-rules`, so
+  `rules/decision-maker.md` never reached the model. What was measured is the invocation rate the tool
+  description plus the task policy alone provoke - not the shipped policy.
+
+So: the endpoint, the one-request batch shape and the validation path are measured working; the
+*benefit* is not demonstrated, and the thresholds were still guesses at that point. Do not read them, or the per-session call limit, as validated by
+this. The 32-request ceiling is arithmetic rather than enforced: the plugin's own five-calls-per-session
+limit bounds spend, and the count is reconciled after each session. Raw artifacts for all three attempts
+(each abort spent real requests) are committed under `docs/research/jev-effective-runs/`, with
+`attempts.md` as the ledger.
+
+A fourth protocol (`docs/research/jev-effective-protocol-4/`) measured the gates directly: 180 calls
+through the real resolver, the first batch whose failure count stayed inside the frozen limit. Its
+rejected-body capture answered the question three earlier runs could not - the one `invalid_response` was
+**our** validator rejecting a valid answer whose probabilities summed to 0.99, not the endpoint breaking
+its shape - and the sweep it fed is what the gates above come from. `read` kept its old value because its
+hold-out was too thin to decide, so the sweep's own volume floor refused it.
+
+The next batch is already specified, frozen and implemented in
+`docs/research/jev-effective-protocol-2/`: a direct-call judgement benchmark (30 graded forks, 70
+calls, no agent) that measures top-1 accuracy and how often the 0.90/0.95 gates refuse to commit, plus
+an 18-session three-arm run whose arm `E` calls a schema-identical empty tool - the control both
+previous reports named as missing, with its response labelled `control` so it can never be mistaken for
+the model declining. `runner.ts --self-check` verifies the case oracles, both fixture graders, the
+control/real schema parity and the reason classification, offline. Its decision rules are fixed before
+the first paid request, and any edit to them makes the numbers a new protocol's, not that one's.

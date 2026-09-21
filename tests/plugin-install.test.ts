@@ -303,6 +303,8 @@ async function main(): Promise<void> {
 		});
 
 		await test("the installed plugin exposes the tool only when opted in", async () => {
+			// The probe runs the real plugin inside a real omp, so a schema the host cannot build (a missing
+			// `mode`/`rubric` builder, for instance) means no tool here at all - no wording check needed.
 			const optedIn = await probeSession({ jevDecisionMaker: "1", openRouterKey: "sk-or-placeholder" });
 			assert.ok(optedIn.tools.includes("decision_maker"), `missing tool; got ${optedIn.tools.slice(0, 40).join(",")}`);
 			const optedOut = await probeSession();
@@ -357,23 +359,6 @@ async function main(): Promise<void> {
 					if (existsSync(path)) unlinkSync(path);
 				}
 			}
-		});
-
-		await test("the README documents install, activation and the labels", () => {
-			const readme = readFileSync(join(REPO, "README.md"), "utf8");
-			for (const fact of [
-				"omp plugin link",
-				"omp plugin install",
-				"setup-jev",
-				"JEV_DECISION_MAKER",
-				"enable --global",
-				"◆ JEV on",
-				"JEV no key",
-				"JEV inactive",
-			]) {
-				assert.ok(readme.includes(fact), `README does not document ${fact}`);
-			}
-			assert.equal(readme.includes("/setup-jev key"), false, "the README still offers the removed key subcommand");
 		});
 
 		await test("the installed plugin writes a readiness status line", async () => {

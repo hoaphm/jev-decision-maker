@@ -1,0 +1,296 @@
+{
+  "generatedAt": "2026-09-21T05:28:25.005Z",
+  "batch": "judgment",
+  "runDir": "<local>/jev-effective-results/run-GUwD9b",
+  "versions": {
+    "omp": "omp/18.2.7",
+    "bun": "1.3.14"
+  },
+  "protocol": {
+    "fixtureSet": [
+      "diagnostic-selection",
+      "patch-shortlist"
+    ],
+    "order": [
+      {
+        "fixture": "diagnostic-selection",
+        "repeat": 1,
+        "arm": "B"
+      },
+      {
+        "fixture": "diagnostic-selection",
+        "repeat": 1,
+        "arm": "J"
+      },
+      {
+        "fixture": "diagnostic-selection",
+        "repeat": 2,
+        "arm": "J"
+      },
+      {
+        "fixture": "diagnostic-selection",
+        "repeat": 2,
+        "arm": "B"
+      },
+      {
+        "fixture": "diagnostic-selection",
+        "repeat": 3,
+        "arm": "B"
+      },
+      {
+        "fixture": "diagnostic-selection",
+        "repeat": 3,
+        "arm": "J"
+      },
+      {
+        "fixture": "patch-shortlist",
+        "repeat": 1,
+        "arm": "J"
+      },
+      {
+        "fixture": "patch-shortlist",
+        "repeat": 1,
+        "arm": "B"
+      },
+      {
+        "fixture": "patch-shortlist",
+        "repeat": 2,
+        "arm": "B"
+      },
+      {
+        "fixture": "patch-shortlist",
+        "repeat": 2,
+        "arm": "J"
+      },
+      {
+        "fixture": "patch-shortlist",
+        "repeat": 3,
+        "arm": "J"
+      },
+      {
+        "fixture": "patch-shortlist",
+        "repeat": 3,
+        "arm": "B"
+      }
+    ],
+    "repeats": [
+      1,
+      2,
+      3
+    ],
+    "extension": "<repo>/src/decision-maker.ts",
+    "mainModel": "9router/cx/gpt-5.6-terra:high",
+    "mainModelRole": "@default",
+    "jevModelPrefix": "typesafe/jev-",
+    "toolsBaseline": "read,write,bash",
+    "toolsTreatment": "read,write,bash,decision_maker",
+    "sessionMaxTime": "3m",
+    "sessionTimeoutMs": 190000,
+    "commonPolicy": "Work only on the current task in this workspace.\n\n- Read only `brief.json`, `src/answer.json` and `tests/check.mjs`. Write only `src/answer.json`.\n- Verify with `bun tests/check.mjs` (that exact command is pre-approved; other shell commands may be refused).\n- No git, no dependency installs, no network beyond the tools you are given.\n- If a `decision_maker` tool is available and the task really forks between distinct options, use it:\n  `mode: \"select\"` to pick one next step, or `mode: \"score\"` with one ordered `rubric` to rate every\n  proposal in a single call instead of writing out each one yourself. Never invent options just to call\n  it, never call it once per candidate, and never call it for a step that is obvious or required.\n- Whatever the tool answers is a suggestion, not a verdict: the acceptance check is still the file you\n  write, and you are responsible for it.\n",
+    "agentsMd": "# Judgment fixture\n\nThe task is stated in the prompt and its data is in `brief.json`. Write your answer to\n`src/answer.json` and nothing else. `tests/check.mjs` is the public acceptance check: leave it\nexactly as it is and make `bun tests/check.mjs` pass.\n",
+    "prompts": {
+      "diagnostic-selection": "Read brief.json. Select the first diagnostic read using the supplied evidence and candidates. Write only {\"candidateId\":\"<id>\"} to src/answer.json. Do not execute the proposed action. Do not change brief.json or tests/check.mjs. Run bun tests/check.mjs.",
+      "patch-shortlist": "Read brief.json. Evaluate all five proposed repairs against the supplied ordered rubric, then choose the strongest supported repair. Write only {\"candidateId\":\"<id>\"} to src/answer.json. Do not implement the proposals, do not change brief.json or tests/check.mjs, and run bun tests/check.mjs."
+    },
+    "briefs": {
+      "diagnostic-selection": {
+        "goal": "Choose the first read that best distinguishes the cause of cross-tenant cached profiles.",
+        "evidence": "Tenant A reads id 7, then tenant B reads id 7 and receives A's profile. Calling the store directly for B returns B's correct profile. The error occurs only after A warms the cache. A trace already confirmed that the service forwards tenant B and id 7 unchanged to the cache. No source for the cache identity has been inspected yet.",
+        "candidates": [
+          {
+            "id": "cache-identity",
+            "kind": "read",
+            "action": "Read src/cache.mjs to identify the cache key and its tenant/id inputs.",
+            "expected": "Determine whether cache identity distinguishes tenants sharing an id."
+          },
+          {
+            "id": "service-forwarding",
+            "kind": "read",
+            "action": "Read src/service.mjs to inspect forwarding of tenant and id to the cache.",
+            "expected": "Determine whether the service passes the requested tenant and id."
+          },
+          {
+            "id": "store-query",
+            "kind": "read",
+            "action": "Read src/store.mjs to inspect the direct tenant filter.",
+            "expected": "Determine whether direct store lookup includes the requested tenant."
+          }
+        ]
+      },
+      "patch-shortlist": {
+        "goal": "Choose the proposed cache repair that preserves the stated contract.",
+        "evidence": "The current cache uses key=id. Tenants can share ids. Contract: same tenant/id reuses its cached value; different tenant/id pairs never share entries; ids and tenants may contain colons or be empty; undefined is a valid cached result; a throwing loader must not create an entry. Map.has/get/set behavior and loader call order are already correct. Change only the key expression unless a proposal explicitly says otherwise.",
+        "candidates": [
+          {
+            "id": "tuple-key",
+            "kind": "edit",
+            "action": "Replace only key=id with key=JSON.stringify([tenantId,id]); keep Map.has/get/set and loader ordering.",
+            "expected": "Cache identity separates tenant/id pairs without changing cache behavior."
+          },
+          {
+            "id": "colon-key",
+            "kind": "edit",
+            "action": "Replace only key=id with key=tenantId+\":\"+id; keep other logic.",
+            "expected": "Cache identity uses tenant and id joined by a colon."
+          },
+          {
+            "id": "tenant-only",
+            "kind": "edit",
+            "action": "Replace only key=id with key=tenantId; keep other logic.",
+            "expected": "Each tenant uses a tenant-specific cache entry."
+          },
+          {
+            "id": "no-cache",
+            "kind": "edit",
+            "action": "Delete Map storage and call load() for every get.",
+            "expected": "No request can reuse another request's cached value."
+          },
+          {
+            "id": "truthy-cache",
+            "kind": "edit",
+            "action": "Use JSON.stringify([tenantId,id]) as key, but replace Map.has with if (!entries.get(key)) before loading.",
+            "expected": "Tenant/id pairs use distinct keys and missing values trigger a load."
+          }
+        ]
+      }
+    },
+    "publicChecks": {
+      "diagnostic-selection": "4d18843177f96e1c377c357297b2b6d738065f0756d1bff5659d481f6db98e77",
+      "patch-shortlist": "2a6729887ff489acf20b28dee9ff5a51cdf4cc7d52ff381454d8658d79a395a2"
+    },
+    "privateGraders": {
+      "diagnostic-selection": "38e85f4bf75ff667abb34db28f902963684e2a681698b3910ac1c4e0b0629e50",
+      "patch-shortlist": "509e9c6317869a403cdbbe405916ef33e259f206559f25029ada61078e5d4cc6"
+    },
+    "briefHashes": {
+      "diagnostic-selection": "56019aa0a82498f21a7a81bcda6f710bfca0426388cd2ca5e589c2fcd3f1821a",
+      "patch-shortlist": "3787d8dfcf356e9d960fbcd6063e16c8533b8162797c7c1ab094957f8528fb6d"
+    },
+    "baselineHasCredential": false,
+    "budget": {
+      "maxPromptSessions": 12,
+      "maxJevRequests": 32,
+      "callLimitPerSession": 5,
+      "retries": 0
+    }
+  },
+  "credentialSource": "omp-store-readonly-to-isolated-env",
+  "credentialVisibleToChild": true,
+  "smoke": {
+    "passed": false,
+    "reason": "the slash command did not answer without an agent turn",
+    "agentTurns": false,
+    "ackWithoutAgentTurn": false,
+    "select": {
+      "requests": 1,
+      "requestBytes": 1571,
+      "questionCount": 1,
+      "status": "selected",
+      "reason": "selected",
+      "candidateId": "cache-identity",
+      "model": "typesafe/jev-1.13-20260917",
+      "latencyMs": 1071.267,
+      "costUsd": 0.000025998
+    },
+    "score": {
+      "requests": 0,
+      "requestBytes": 0,
+      "questionCount": 0,
+      "status": "main",
+      "reason": "invalid_input",
+      "model": null,
+      "latencyMs": 0.025,
+      "costUsd": null,
+      "scoredIds": null
+    }
+  },
+  "sessions": [],
+  "pairs": [],
+  "perFixture": [
+    {
+      "fixture": "diagnostic-selection",
+      "mode": "select",
+      "pairs": 0,
+      "agentMsBaseline": [],
+      "agentMsTreatment": [],
+      "medianAgentRatio": null,
+      "minAgentRatio": null,
+      "maxAgentRatio": null,
+      "fasterPairs": 0,
+      "costRatioKnownPairs": 0,
+      "medianCostRatio": null,
+      "tasksPassedBaseline": 0,
+      "tasksPassedTreatment": 0,
+      "sessionsBaseline": 0,
+      "sessionsTreatment": 0,
+      "jevRequests": 0,
+      "modesRequested": [],
+      "questionCounts": [],
+      "toolInputBytes": [],
+      "jevLatencyMs": [],
+      "jevCostUsd": [],
+      "selected": 0,
+      "scored": 0,
+      "deferred": 0,
+      "uncertain": 0,
+      "clientFailures": 0,
+      "finalMatchesSelection": null,
+      "finalInTopScoreSet": null,
+      "costStatus": "reported"
+    },
+    {
+      "fixture": "patch-shortlist",
+      "mode": "score",
+      "pairs": 0,
+      "agentMsBaseline": [],
+      "agentMsTreatment": [],
+      "medianAgentRatio": null,
+      "minAgentRatio": null,
+      "maxAgentRatio": null,
+      "fasterPairs": 0,
+      "costRatioKnownPairs": 0,
+      "medianCostRatio": null,
+      "tasksPassedBaseline": 0,
+      "tasksPassedTreatment": 0,
+      "sessionsBaseline": 0,
+      "sessionsTreatment": 0,
+      "jevRequests": 0,
+      "modesRequested": [],
+      "questionCounts": [],
+      "toolInputBytes": [],
+      "jevLatencyMs": [],
+      "jevCostUsd": [],
+      "selected": 0,
+      "scored": 0,
+      "deferred": 0,
+      "uncertain": 0,
+      "clientFailures": 0,
+      "finalMatchesSelection": null,
+      "finalInTopScoreSet": null,
+      "costStatus": "reported"
+    }
+  ],
+  "gate": {
+    "aborted": "smoke failed: the slash command did not answer without an agent turn",
+    "collectionComplete": false,
+    "sessionsRun": 0,
+    "sessionsExpected": 12,
+    "promptSessions": 0,
+    "jevRequests": 2,
+    "budget": {
+      "maxPromptSessions": 12,
+      "maxJevRequests": 32,
+      "callLimitPerSession": 5,
+      "retries": 0
+    },
+    "costStatus": "unknown",
+    "knownSubtotalUsd": null,
+    "exercised": false,
+    "scoreExercised": false,
+    "qualityHolds": true,
+    "faster": false,
+    "cheaper": false,
+    "benefit": false,
+    "functionalPass": false
+  }
+}

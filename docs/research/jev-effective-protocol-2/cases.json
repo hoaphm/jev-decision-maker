@@ -1,0 +1,1123 @@
+{
+  "protocol": "jev-effective-protocol-2",
+  "note": "Mỗi fork có `contract` là câu nằm NGUYÊN VĂN trong `state`, và oracle suy được chỉ từ câu đó. Self-check của runner assert `state.includes(contract)` và `oracle` thuộc `candidates`; fork nào không thoả thì runner từ chối chạy.",
+  "rubric": [
+    "Contradicts the stated contract or symptom",
+    "Unsupported but not contradicted",
+    "Partially supported",
+    "Supported with an unresolved caveat",
+    "Directly supported with no known contradiction"
+  ],
+  "dossiers": [
+    {
+      "id": "cache-isolation",
+      "title": "Hai tenant dùng chung id thấy dữ liệu của nhau",
+      "forks": [
+        {
+          "id": "F1",
+          "kind": "read",
+          "goal": "Choose the single read that best distinguishes the cause of cross-tenant cached profiles.",
+          "contract": "The wrong profile appears only after the first tenant has warmed the path; a cold read by the second tenant is always correct.",
+          "state": "Tenant A reads id 7. Later tenant B reads id 7 and receives A's profile. Calling the store directly for B returns B's correct profile. The wrong profile appears only after the first tenant has warmed the path; a cold read by the second tenant is always correct. No source of the cache identity has been inspected yet.",
+          "candidates": [
+            {
+              "id": "cache-key",
+              "kind": "read",
+              "action": "Read the module that builds the cache key, to see whether tenant participates in it.",
+              "expected": "Decide whether the cache identity can distinguish two tenants that share an id."
+            },
+            {
+              "id": "service-pass",
+              "kind": "read",
+              "action": "Read the service that calls the cache, to see what tenant value it forwards.",
+              "expected": "Decide whether the requested tenant reaches the cache unchanged."
+            },
+            {
+              "id": "store-filter",
+              "kind": "read",
+              "action": "Read the store that queries rows directly, to see its tenant predicate.",
+              "expected": "Decide whether a direct lookup filters by tenant."
+            },
+            {
+              "id": "fixture-order",
+              "kind": "read",
+              "action": "Read the test fixture rows, to see the order the tenants were warmed in.",
+              "expected": "Decide whether the observed order alone explains the leak."
+            }
+          ],
+          "oracle": "cache-key",
+          "why": "Chỉ giả thuyết cache key dự đoán đúng hình dạng triệu chứng (sai chỉ sau khi làm nóng); lỗi ở service hoặc store sẽ làm B sai ngay cả khi cache lạnh."
+        },
+        {
+          "id": "F2",
+          "kind": "edit",
+          "goal": "Choose the repair that preserves the stated cache contract.",
+          "contract": "tenant and id may be empty or contain colons, and an undefined result is a valid cached value",
+          "state": "The current key is the id alone. Contract: the same tenant and id must reuse one cached value; different tenant/id pairs must never share an entry; tenant and id may be empty or contain colons, and an undefined result is a valid cached value; a throwing loader must not create an entry. Map.has/get/set and the loader call order are already correct.",
+          "candidates": [
+            {
+              "id": "tuple",
+              "kind": "edit",
+              "action": "Key on JSON.stringify([tenantId, id]) only.",
+              "expected": "Tenant/id pairs stop sharing entries and nothing else changes."
+            },
+            {
+              "id": "colon",
+              "kind": "edit",
+              "action": "Key on tenantId + \":\" + id only.",
+              "expected": "One key per tenant/id pair."
+            },
+            {
+              "id": "tenant",
+              "kind": "edit",
+              "action": "Key on tenantId only.",
+              "expected": "Each tenant keeps its own cache entry."
+            },
+            {
+              "id": "nocache",
+              "kind": "edit",
+              "action": "Remove the Map and call the loader on every read.",
+              "expected": "No read can reuse another read's value."
+            }
+          ],
+          "oracle": "tuple",
+          "why": "`colon` va chạm khi id chứa dấu hai chấm, `tenant` gộp mọi id của một tenant, `nocache` vi phạm yêu cầu tái sử dụng."
+        },
+        {
+          "id": "F3",
+          "kind": "check",
+          "goal": "Choose the check that would have caught this defect.",
+          "contract": "The check must fail on the seeded defect and must not assert the key's internal format.",
+          "state": "The defect is a cache key that omits the tenant. Neighbouring behaviour is already covered: the loader runs once per key, undefined is cached, and the key is produced by a single module. The check must fail on the seeded defect and must not assert the key's internal format.",
+          "candidates": [
+            {
+              "id": "cross-tenant",
+              "kind": "check",
+              "action": "Assert that two tenants sharing an id never observe each other's value.",
+              "expected": "The check fails while the key omits the tenant."
+            },
+            {
+              "id": "loader-once",
+              "kind": "check",
+              "action": "Assert the loader runs once for repeated reads of one key.",
+              "expected": "The check fails when the loader runs twice."
+            },
+            {
+              "id": "undefined-cached",
+              "kind": "check",
+              "action": "Assert an undefined result is cached.",
+              "expected": "The check fails when undefined is reloaded."
+            },
+            {
+              "id": "key-format",
+              "kind": "check",
+              "action": "Assert the key equals the JSON tuple of tenant and id.",
+              "expected": "The check fails when the key has another shape."
+            }
+          ],
+          "oracle": "cross-tenant",
+          "why": "Contract loại check khẳng định định dạng key; ba cái còn lại đều pass trên bản lỗi."
+        }
+      ]
+    },
+    {
+      "id": "retry-amplification",
+      "title": "Một đợt lỗi làm số request tăng gấp bốn",
+      "forks": [
+        {
+          "id": "F4",
+          "kind": "read",
+          "goal": "Choose the read that best explains a fourfold request amplification.",
+          "contract": "Queue concurrency was never saturated, and every attempt for one event happened within the same second.",
+          "state": "A batch job produced 400 downstream requests for 100 events during one burst of upstream failures. The amplification is exactly four per event. Queue concurrency was never saturated, and every attempt for one event happened within the same second.",
+          "candidates": [
+            {
+              "id": "backoff",
+              "kind": "read",
+              "action": "Read the retry policy to see the delay computed between attempts.",
+              "expected": "Decide whether consecutive attempts are separated in time."
+            },
+            {
+              "id": "concurrency",
+              "kind": "read",
+              "action": "Read the queue configuration to see its concurrency limit.",
+              "expected": "Decide whether the queue parallelises one event's attempts."
+            },
+            {
+              "id": "timeout",
+              "kind": "read",
+              "action": "Read the client timeout to see whether one attempt can overlap the next.",
+              "expected": "Decide whether a timed-out attempt is retried while still running."
+            },
+            {
+              "id": "handler",
+              "kind": "read",
+              "action": "Read the event handler to see how it reports failures.",
+              "expected": "Decide whether the handler multiplies one event into several."
+            }
+          ],
+          "oracle": "backoff",
+          "why": "Concurrency chưa bão hoà nên không phải nguyên nhân; bốn attempt cùng một giây chỉ khớp với policy không đặt delay."
+        },
+        {
+          "id": "F5",
+          "kind": "edit",
+          "goal": "Choose the repair that satisfies the stated delivery contract.",
+          "contract": "every event must be delivered eventually, at most four attempts per event, with a growing delay between attempts, and no new dependency.",
+          "state": "Contract for the repair: every event must be delivered eventually, at most four attempts per event, with a growing delay between attempts, and no new dependency. The p99 latency budget must not increase.",
+          "candidates": [
+            {
+              "id": "backoff-jitter",
+              "kind": "edit",
+              "action": "Compute an exponentially growing delay with jitter between attempts.",
+              "expected": "Attempts are spaced and capped at four."
+            },
+            {
+              "id": "mutex",
+              "kind": "edit",
+              "action": "Serialise all retries behind one global mutex.",
+              "expected": "Only one retry runs at a time."
+            },
+            {
+              "id": "breaker",
+              "kind": "edit",
+              "action": "Open a circuit breaker after consecutive failures and drop the pending events.",
+              "expected": "Downstream load stops during an incident."
+            },
+            {
+              "id": "no-retry",
+              "kind": "edit",
+              "action": "Stop retrying and report the failure immediately.",
+              "expected": "No event is retried."
+            }
+          ],
+          "oracle": "backoff-jitter",
+          "why": "`breaker` và `no-retry` vi phạm yêu cầu phải giao được; `mutex` không đổi số lần thử."
+        },
+        {
+          "id": "F6",
+          "kind": "check",
+          "goal": "Choose the check that would have caught the amplification.",
+          "contract": "The check must fail on that policy and pass once the delay grows, without asserting a specific delay formula.",
+          "state": "The defect was a retry policy that computed no delay, so four attempts landed in the same second. The check must fail on that policy and pass once the delay grows, without asserting a specific delay formula.",
+          "candidates": [
+            {
+              "id": "spacing",
+              "kind": "check",
+              "action": "Assert consecutive attempts for one event are separated by a positive delay.",
+              "expected": "The check fails when attempts share a timestamp."
+            },
+            {
+              "id": "attempt-cap",
+              "kind": "check",
+              "action": "Assert an event is attempted at most four times.",
+              "expected": "The check fails when a fifth attempt happens."
+            },
+            {
+              "id": "delivery",
+              "kind": "check",
+              "action": "Assert every event is eventually delivered.",
+              "expected": "The check fails when an event is dropped."
+            },
+            {
+              "id": "in-flight",
+              "kind": "check",
+              "action": "Assert in-flight attempts never exceed the configured limit.",
+              "expected": "The check fails when the limit is exceeded."
+            }
+          ],
+          "oracle": "spacing",
+          "why": "Cap, delivery và in-flight đều pass trên bản lỗi; chỉ khẳng định khoảng cách mới phân biệt được."
+        }
+      ]
+    },
+    {
+      "id": "cursor-pagination",
+      "title": "Vòng lặp phân trang dừng sớm ở cursor hợp lệ nhưng rỗng",
+      "forks": [
+        {
+          "id": "F7",
+          "kind": "read",
+          "goal": "Choose the read that best explains a truncated result set.",
+          "contract": "The page count in the trace is correct and the last page returned an empty-string cursor.",
+          "state": "A collector returns fewer items than the source holds. The page count in the trace is correct and the last page returned an empty-string cursor. No read of the loop or of the page shape has happened yet.",
+          "candidates": [
+            {
+              "id": "loop-guard",
+              "kind": "read",
+              "action": "Read the collector's loop condition and cursor update.",
+              "expected": "Decide whether a valid but falsy cursor ends the loop."
+            },
+            {
+              "id": "page-shape",
+              "kind": "read",
+              "action": "Read the page object's documented cursor semantics.",
+              "expected": "Decide what an empty-string cursor means."
+            },
+            {
+              "id": "caller",
+              "kind": "read",
+              "action": "Read the caller that consumes the collector's result.",
+              "expected": "Decide whether the caller drops items."
+            },
+            {
+              "id": "fixtures",
+              "kind": "read",
+              "action": "Read the test fixtures for the collector.",
+              "expected": "Decide whether the fixtures cover an empty-string cursor."
+            }
+          ],
+          "oracle": "loop-guard",
+          "why": "Trace đã nói số trang đúng và cursor cuối là chuỗi rỗng, nên chỗ sai nằm ở điều kiện vòng lặp."
+        },
+        {
+          "id": "F8",
+          "kind": "edit",
+          "goal": "Choose the repair that preserves the collector's contract.",
+          "contract": "a null cursor means the end of the sequence and nothing else does",
+          "state": "Contract: a null cursor means the end of the sequence and nothing else does; the function signature and the existing rejection behaviour must not change; partial results must never be returned on error.",
+          "candidates": [
+            {
+              "id": "null-check",
+              "kind": "edit",
+              "action": "Continue while the cursor is not null, comparing against null explicitly.",
+              "expected": "An empty-string cursor no longer ends the loop."
+            },
+            {
+              "id": "length-guard",
+              "kind": "edit",
+              "action": "Continue while the returned page has items.",
+              "expected": "The loop stops at an empty page."
+            },
+            {
+              "id": "collect-dedupe",
+              "kind": "edit",
+              "action": "Keep the current loop and de-duplicate the collected items afterwards.",
+              "expected": "The result stops repeating items."
+            },
+            {
+              "id": "widen-loop",
+              "kind": "edit",
+              "action": "Keep the truthiness check but request one extra page.",
+              "expected": "One more page is collected."
+            }
+          ],
+          "oracle": "null-check",
+          "why": "So sánh tường minh với null là cách duy nhất không đổi nghĩa của các cursor hợp lệ khác."
+        },
+        {
+          "id": "F9",
+          "kind": "check",
+          "goal": "Choose the check that would have caught the truncation.",
+          "contract": "The check must fail on the current loop and must not assert loop syntax.",
+          "state": "The defect is a loop that stops on any falsy cursor. The check must fail on the current loop and must not assert loop syntax.",
+          "candidates": [
+            {
+              "id": "falsy-cursor",
+              "kind": "check",
+              "action": "Assert the page behind an empty-string cursor is still collected.",
+              "expected": "The check fails while the loop stops on a falsy cursor."
+            },
+            {
+              "id": "page-cap",
+              "kind": "check",
+              "action": "Assert the loop requests at most ten pages.",
+              "expected": "The check fails when more pages are requested."
+            },
+            {
+              "id": "count-matches",
+              "kind": "check",
+              "action": "Assert the collected count equals the fixture's item count.",
+              "expected": "The check fails when items are missing."
+            },
+            {
+              "id": "cursor-type",
+              "kind": "check",
+              "action": "Assert every cursor is a string or null.",
+              "expected": "The check fails on another cursor type."
+            }
+          ],
+          "oracle": "falsy-cursor",
+          "why": "Chỉ check đi qua đúng trang sau cursor chuỗi rỗng mới phân biệt được, và nó không phụ thuộc cú pháp vòng lặp."
+        }
+      ]
+    },
+    {
+      "id": "migration-idempotence",
+      "title": "Migration chạy lần thứ hai thì lỗi",
+      "forks": [
+        {
+          "id": "F10",
+          "kind": "read",
+          "goal": "Choose the read that best explains a migration that only succeeds once.",
+          "contract": "The error names an object that already exists.",
+          "state": "Applying the migration twice fails on the second run. The error names an object that already exists. The runner is configured to apply every file it finds in order.",
+          "candidates": [
+            {
+              "id": "ddl",
+              "kind": "read",
+              "action": "Read the migration's DDL statements.",
+              "expected": "Decide whether they can run twice."
+            },
+            {
+              "id": "runner",
+              "kind": "read",
+              "action": "Read the runner's ordering and bookkeeping.",
+              "expected": "Decide whether applied files are skipped."
+            },
+            {
+              "id": "failing-statement",
+              "kind": "read",
+              "action": "Read the exact statement the error reports.",
+              "expected": "Decide which statement is not repeatable."
+            },
+            {
+              "id": "ledger",
+              "kind": "read",
+              "action": "Read the table that records applied migrations.",
+              "expected": "Decide whether the record is written after success."
+            }
+          ],
+          "oracle": "ddl",
+          "why": "Lỗi nói object đã tồn tại, tức vấn đề nằm ở việc DDL không chạy lại được, không nằm ở bookkeeping."
+        },
+        {
+          "id": "F11",
+          "kind": "edit",
+          "goal": "Choose the repair that keeps migrations re-runnable.",
+          "contract": "the migration must be re-runnable without dropping data or requiring manual cleanup.",
+          "state": "Contract for the repair: the migration must be re-runnable without dropping data or requiring manual cleanup.",
+          "candidates": [
+            {
+              "id": "if-not-exists",
+              "kind": "edit",
+              "action": "Guard the DDL with existence checks for each object it creates.",
+              "expected": "A second run changes nothing and does not fail."
+            },
+            {
+              "id": "drop-create",
+              "kind": "edit",
+              "action": "Drop each object before creating it.",
+              "expected": "The DDL succeeds on every run."
+            },
+            {
+              "id": "version-bump",
+              "kind": "edit",
+              "action": "Give the migration a new version number.",
+              "expected": "The runner treats it as a fresh file."
+            },
+            {
+              "id": "swallow",
+              "kind": "edit",
+              "action": "Catch and ignore the already-exists error.",
+              "expected": "The runner proceeds past the failure."
+            }
+          ],
+          "oracle": "if-not-exists",
+          "why": "Drop xoá dữ liệu, version bump chỉ hoãn, swallow che lỗi thật; chỉ guard mới vừa lặp lại được vừa giữ dữ liệu."
+        },
+        {
+          "id": "F12",
+          "kind": "check",
+          "goal": "Choose the check that would have caught this.",
+          "contract": "The check must fail if the migration cannot be applied twice, and must not assert DDL text.",
+          "state": "The defect is a migration that fails on a second application. The check must fail if the migration cannot be applied twice, and must not assert DDL text.",
+          "candidates": [
+            {
+              "id": "apply-twice",
+              "kind": "check",
+              "action": "Apply the migration twice in a row and assert both runs succeed.",
+              "expected": "The check fails on the second run."
+            },
+            {
+              "id": "object-exists",
+              "kind": "check",
+              "action": "Assert the object exists after the first run.",
+              "expected": "The check fails when the object is missing."
+            },
+            {
+              "id": "version-recorded",
+              "kind": "check",
+              "action": "Assert the migration version is recorded after success.",
+              "expected": "The check fails when the record is absent."
+            },
+            {
+              "id": "no-error",
+              "kind": "check",
+              "action": "Assert the first run reports no error.",
+              "expected": "The check fails when the first run errors."
+            }
+          ],
+          "oracle": "apply-twice",
+          "why": "Ba check còn lại đều pass trên bản lỗi vì chúng chỉ nhìn lần chạy đầu."
+        }
+      ]
+    },
+    {
+      "id": "auth-precedence",
+      "title": "Lệnh cấm tường minh bị quyền nhóm ghi đè",
+      "forks": [
+        {
+          "id": "F13",
+          "kind": "read",
+          "goal": "Choose the read that best explains an overridden denial.",
+          "contract": "A user with an explicit deny is allowed because a group grants the same permission.",
+          "state": "A user with an explicit deny is allowed because a group grants the same permission. The configuration documentation states that an explicit deny always wins.",
+          "candidates": [
+            {
+              "id": "resolution-order",
+              "kind": "read",
+              "action": "Read the function that resolves the effective permission.",
+              "expected": "Decide the order denials and grants are combined in."
+            },
+            {
+              "id": "group-source",
+              "kind": "read",
+              "action": "Read where group memberships are loaded from.",
+              "expected": "Decide whether the correct groups are attached."
+            },
+            {
+              "id": "request-parser",
+              "kind": "read",
+              "action": "Read how the request identifies its user.",
+              "expected": "Decide whether the right principal is used."
+            },
+            {
+              "id": "fixtures",
+              "kind": "read",
+              "action": "Read the permission test fixtures.",
+              "expected": "Decide whether a deny-and-grant case exists."
+            }
+          ],
+          "oracle": "resolution-order",
+          "why": "Triệu chứng nói đúng cặp deny/grant bị đảo kết quả, nên chỗ sai là thứ tự hợp nhất."
+        },
+        {
+          "id": "F14",
+          "kind": "edit",
+          "goal": "Choose the repair that makes denial decisive.",
+          "contract": "a deny from any source must beat a grant from any other source, including a wildcard grant",
+          "state": "Contract: a deny from any source must beat a grant from any other source, including a wildcard grant; behaviour for users with no rules must not change.",
+          "candidates": [
+            {
+              "id": "deny-wins",
+              "kind": "edit",
+              "action": "Short-circuit as soon as any source denies, before evaluating grants.",
+              "expected": "A denied permission is never allowed."
+            },
+            {
+              "id": "groups-first",
+              "kind": "edit",
+              "action": "Evaluate group rules before user rules.",
+              "expected": "Group decisions take precedence."
+            },
+            {
+              "id": "normalise-case",
+              "kind": "edit",
+              "action": "Normalise permission names before comparing them.",
+              "expected": "Differently cased rules match."
+            },
+            {
+              "id": "warn",
+              "kind": "edit",
+              "action": "Log a warning when a deny and a grant both apply.",
+              "expected": "Conflicts become visible in logs."
+            }
+          ],
+          "oracle": "deny-wins",
+          "why": "Groups-first đảo ngược tài liệu, normalise không liên quan, warn không đổi kết quả."
+        },
+        {
+          "id": "F15",
+          "kind": "check",
+          "goal": "Choose the check that would have caught this.",
+          "contract": "The check must fail while a grant can override a deny, and must not assert the order of rules in code.",
+          "state": "The defect is a grant that overrides an explicit deny. The check must fail while a grant can override a deny, and must not assert the order of rules in code.",
+          "candidates": [
+            {
+              "id": "deny-vs-grant",
+              "kind": "check",
+              "action": "Assert a user denied a permission is refused even when a group grants it.",
+              "expected": "The check fails while the grant wins."
+            },
+            {
+              "id": "wildcard-denied",
+              "kind": "check",
+              "action": "Assert a wildcard grant does not allow a denied permission.",
+              "expected": "The check fails when the wildcard allows it."
+            },
+            {
+              "id": "membership",
+              "kind": "check",
+              "action": "Assert the user is a member of the granting group.",
+              "expected": "The check fails when membership is missing."
+            },
+            {
+              "id": "config-parses",
+              "kind": "check",
+              "action": "Assert the permission configuration parses.",
+              "expected": "The check fails on a malformed configuration."
+            }
+          ],
+          "oracle": "deny-vs-grant",
+          "why": "Chỉ cái đầu mô tả đúng kết quả quan sát được; wildcard-denied là biến thể hẹp hơn nhưng không bắt được ca deny-vs-allow, các cái còn lại pass trên bản lỗi."
+        }
+      ]
+    },
+    {
+      "id": "ratelimit-bucketing",
+      "title": "Hạn mức bị nhân đôi khi burst vắt qua mốc thời gian",
+      "forks": [
+        {
+          "id": "F16",
+          "kind": "read",
+          "goal": "Choose the read that best explains a doubled allowance.",
+          "contract": "A burst that spans a minute boundary is allowed twice, and each attempt starts a fresh counter.",
+          "state": "A client that should be limited to 100 requests per minute got 200 through. A burst that spans a minute boundary is allowed twice, and each attempt starts a fresh counter.",
+          "candidates": [
+            {
+              "id": "window-computation",
+              "kind": "read",
+              "action": "Read how the current window's start and end are computed.",
+              "expected": "Decide whether the window slides with the burst."
+            },
+            {
+              "id": "store-ttl",
+              "kind": "read",
+              "action": "Read the counter store's expiry configuration.",
+              "expected": "Decide when the counter is discarded."
+            },
+            {
+              "id": "client-retry",
+              "kind": "read",
+              "action": "Read the client's retry behaviour.",
+              "expected": "Decide whether the client resends requests."
+            },
+            {
+              "id": "test-clock",
+              "kind": "read",
+              "action": "Read the clock the limiter reads.",
+              "expected": "Decide whether the limiter and the test share a clock."
+            }
+          ],
+          "oracle": "window-computation",
+          "why": "Symptom nói burst vắt qua mốc và mỗi lần bắt đầu lại, tức chỗ sai là cách tính cửa sổ cố định."
+        },
+        {
+          "id": "F17",
+          "kind": "edit",
+          "goal": "Choose the repair that bounds the allowance across a boundary.",
+          "contract": "the allowance must hold across a boundary, the store interface must stay, and no new dependency may be added.",
+          "state": "Contract for the repair: the allowance must hold across a boundary, the store interface must stay, and no new dependency may be added.",
+          "candidates": [
+            {
+              "id": "sliding",
+              "kind": "edit",
+              "action": "Count the timestamps of the last interval instead of resetting a fixed bucket.",
+              "expected": "A burst spanning a boundary is counted once."
+            },
+            {
+              "id": "shorter-ttl",
+              "kind": "edit",
+              "action": "Keep the fixed bucket and shorten the counter's expiry.",
+              "expected": "Counters reset more often."
+            },
+            {
+              "id": "in-memory",
+              "kind": "edit",
+              "action": "Keep a counter in process memory per client.",
+              "expected": "The limit is enforced without the store."
+            },
+            {
+              "id": "raise-limit",
+              "kind": "edit",
+              "action": "Raise the configured limit to cover the burst.",
+              "expected": "Fewer clients are rejected."
+            }
+          ],
+          "oracle": "sliding",
+          "why": "TTL ngắn hơn còn nới hạn mức, in-memory bỏ store, nâng limit là đổi yêu cầu chứ không sửa lỗi."
+        },
+        {
+          "id": "F18",
+          "kind": "check",
+          "goal": "Choose the check that would have caught this.",
+          "contract": "The check must fail for a burst crossing a boundary and must not assert the algorithm's name.",
+          "state": "The defect lets a burst that crosses a boundary through twice. The check must fail for a burst crossing a boundary and must not assert the algorithm's name.",
+          "candidates": [
+            {
+              "id": "boundary-burst",
+              "kind": "check",
+              "action": "Send a burst that spans a boundary and assert the total allowed stays at the limit.",
+              "expected": "The check fails while the boundary doubles the allowance."
+            },
+            {
+              "id": "reset-at-sixty",
+              "kind": "check",
+              "action": "Assert the counter resets at sixty seconds.",
+              "expected": "The check fails when the reset is late."
+            },
+            {
+              "id": "rejection-response",
+              "kind": "check",
+              "action": "Assert an over-limit request is rejected.",
+              "expected": "The check fails when it is accepted."
+            },
+            {
+              "id": "store-ttl",
+              "kind": "check",
+              "action": "Assert the store entry expires.",
+              "expected": "The check fails when the entry persists."
+            }
+          ],
+          "oracle": "boundary-burst",
+          "why": "Ba cái còn lại đều pass trên bản lỗi vì chúng không đặt burst qua mốc."
+        }
+      ]
+    },
+    {
+      "id": "event-dedup",
+      "title": "Sự kiện bị xử lý hai lần sau khi retry",
+      "forks": [
+        {
+          "id": "F19",
+          "kind": "read",
+          "goal": "Choose the read that best explains a duplicated side effect.",
+          "contract": "The queue guarantees at-least-once delivery and the producer attaches a stable event id.",
+          "state": "One payment was charged twice. The queue guarantees at-least-once delivery and the producer attaches a stable event id.",
+          "candidates": [
+            {
+              "id": "consumer-store",
+              "kind": "read",
+              "action": "Read the consumer's record of processed events.",
+              "expected": "Decide whether a re-delivered event can be recognised."
+            },
+            {
+              "id": "producer-id",
+              "kind": "read",
+              "action": "Read how the producer assigns event ids.",
+              "expected": "Decide whether the id is stable across retries."
+            },
+            {
+              "id": "retry-policy",
+              "kind": "read",
+              "action": "Read the queue's retry policy.",
+              "expected": "Decide how many times a delivery may repeat."
+            },
+            {
+              "id": "payload-hash",
+              "kind": "read",
+              "action": "Read how the payload is serialised.",
+              "expected": "Decide whether equal payloads hash equally."
+            }
+          ],
+          "oracle": "consumer-store",
+          "why": "Contract đã chốt id ổn định và queue giao ít nhất một lần, nên phía thiếu là bộ nhớ của consumer."
+        },
+        {
+          "id": "F20",
+          "kind": "edit",
+          "goal": "Choose the repair that makes duplicate delivery harmless.",
+          "contract": "a duplicate delivery must not produce a second side effect",
+          "state": "Contract: a duplicate delivery must not produce a second side effect; the queue's at-least-once behaviour is not changeable.",
+          "candidates": [
+            {
+              "id": "record-ids",
+              "kind": "edit",
+              "action": "Record the event id before the side effect and skip ids already recorded.",
+              "expected": "A re-delivered event performs no second side effect."
+            },
+            {
+              "id": "ack-first",
+              "kind": "edit",
+              "action": "Acknowledge the event before performing the side effect.",
+              "expected": "The queue stops re-delivering."
+            },
+            {
+              "id": "lock",
+              "kind": "edit",
+              "action": "Take a lock on the event id for the duration of the handler.",
+              "expected": "Two deliveries cannot run at once."
+            },
+            {
+              "id": "hash-payload",
+              "kind": "edit",
+              "action": "Skip events whose payload hash was seen recently.",
+              "expected": "Repeated payloads are dropped."
+            }
+          ],
+          "oracle": "record-ids",
+          "why": "Ack trước khi xử lý làm mất sự kiện, lock chỉ chặn song song chứ không chặn lần giao thứ hai, hash payload có thể trùng giữa hai giao dịch khác nhau."
+        },
+        {
+          "id": "F21",
+          "kind": "check",
+          "goal": "Choose the check that would have caught the double charge.",
+          "contract": "The check must fail when one event is delivered twice, and must not assert the storage used.",
+          "state": "The defect charged a customer twice for one event. The check must fail when one event is delivered twice, and must not assert the storage used.",
+          "candidates": [
+            {
+              "id": "deliver-twice",
+              "kind": "check",
+              "action": "Deliver the same event id twice and assert one side effect.",
+              "expected": "The check fails while the second delivery charges again."
+            },
+            {
+              "id": "ack-order",
+              "kind": "check",
+              "action": "Assert the event is acknowledged after the side effect.",
+              "expected": "The check fails when the order is reversed."
+            },
+            {
+              "id": "id-present",
+              "kind": "check",
+              "action": "Assert the event carries an id.",
+              "expected": "The check fails when the id is missing."
+            },
+            {
+              "id": "store-is-set",
+              "kind": "check",
+              "action": "Assert the processed ids are kept in a set.",
+              "expected": "The check fails on another container."
+            }
+          ],
+          "oracle": "deliver-twice",
+          "why": "Ba cái còn lại pass trên bản lỗi hoặc khẳng định chi tiết cài đặt."
+        }
+      ]
+    },
+    {
+      "id": "timezone-boundary",
+      "title": "Báo cáo ngày lệch một ngày cho múi giờ +14",
+      "forks": [
+        {
+          "id": "F22",
+          "kind": "read",
+          "goal": "Choose the read that best explains an off-by-one daily report.",
+          "contract": "Only accounts at offsets beyond +12 are affected and stored timestamps are UTC.",
+          "state": "The daily report is off by one day. Only accounts at offsets beyond +12 are affected and stored timestamps are UTC.",
+          "candidates": [
+            {
+              "id": "day-boundary",
+              "kind": "read",
+              "action": "Read how the report's day boundaries are computed.",
+              "expected": "Decide whether the user's offset is accounted for."
+            },
+            {
+              "id": "tz-field",
+              "kind": "read",
+              "action": "Read how the account's timezone is stored and loaded.",
+              "expected": "Decide whether the offset is available to the report."
+            },
+            {
+              "id": "storage-format",
+              "kind": "read",
+              "action": "Read how timestamps are written to storage.",
+              "expected": "Decide whether timestamps carry an offset."
+            },
+            {
+              "id": "report-query",
+              "kind": "read",
+              "action": "Read the report's query and its grouping key.",
+              "expected": "Decide whether rows are grouped by the wrong key."
+            }
+          ],
+          "oracle": "day-boundary",
+          "why": "Contract nói chỉ offset lớn bị ảnh hưởng và dữ liệu là UTC, nên chỗ sai là phép tính biên ngày."
+        },
+        {
+          "id": "F23",
+          "kind": "edit",
+          "goal": "Choose the repair that makes the report cover the user's local day.",
+          "contract": "the report must cover the user's local calendar day while stored timestamps stay UTC.",
+          "state": "Contract for the repair: the report must cover the user's local calendar day while stored timestamps stay UTC.",
+          "candidates": [
+            {
+              "id": "local-bounds",
+              "kind": "edit",
+              "action": "Compute the local day's start and end in the user's offset and convert both to UTC.",
+              "expected": "The query covers exactly the user's local day."
+            },
+            {
+              "id": "store-local",
+              "kind": "edit",
+              "action": "Store timestamps in the user's local time.",
+              "expected": "Grouping by date matches the user's day."
+            },
+            {
+              "id": "fixed-shift",
+              "kind": "edit",
+              "action": "Shift timestamps by a fixed number of hours.",
+              "expected": "The report lines up for most users."
+            },
+            {
+              "id": "server-day",
+              "kind": "edit",
+              "action": "Group by the server's calendar day.",
+              "expected": "The report stays consistent between servers."
+            }
+          ],
+          "oracle": "local-bounds",
+          "why": "Đổi cách lưu phá contract UTC, shift cố định sai với offset khác, server-day chính là lỗi hiện tại."
+        },
+        {
+          "id": "F24",
+          "kind": "check",
+          "goal": "Choose the check that would have caught the off-by-one.",
+          "contract": "The check must fail for a user at +14 near the day edge, and must not assert a specific timezone library.",
+          "state": "The defect mis-bucketed a user at +14 near the day edge. The check must fail for a user at +14 near the day edge, and must not assert a specific timezone library.",
+          "candidates": [
+            {
+              "id": "plus14-edge",
+              "kind": "check",
+              "action": "Build an event at the local day edge for a +14 account and assert it lands in that day.",
+              "expected": "The check fails while the boundary ignores the offset."
+            },
+            {
+              "id": "utc-storage",
+              "kind": "check",
+              "action": "Assert stored timestamps are UTC.",
+              "expected": "The check fails on a local timestamp."
+            },
+            {
+              "id": "row-count",
+              "kind": "check",
+              "action": "Assert the report returns one row per day.",
+              "expected": "The check fails on a missing row."
+            },
+            {
+              "id": "tz-present",
+              "kind": "check",
+              "action": "Assert the account has a timezone.",
+              "expected": "The check fails when it is absent."
+            }
+          ],
+          "oracle": "plus14-edge",
+          "why": "Ba cái còn lại pass trên bản lỗi vì chúng không đặt dữ liệu ở đúng biên với offset lớn."
+        }
+      ]
+    },
+    {
+      "id": "config-precedence",
+      "title": "Biến môi trường bị giá trị trong file ghi đè",
+      "forks": [
+        {
+          "id": "F25",
+          "kind": "read",
+          "goal": "Choose the read that best explains why an override had no effect.",
+          "contract": "The variable is documented as authoritative, yet the file's value is what the process uses.",
+          "state": "Setting the variable changed nothing in production, though it works locally. The variable is documented as authoritative, yet the file's value is what the process uses.",
+          "candidates": [
+            {
+              "id": "merge-order",
+              "kind": "read",
+              "action": "Read the order the file and the environment are merged in.",
+              "expected": "Decide which source wins when both are set."
+            },
+            {
+              "id": "env-parsing",
+              "kind": "read",
+              "action": "Read how the environment variable is parsed.",
+              "expected": "Decide whether the value is read correctly."
+            },
+            {
+              "id": "file-loader",
+              "kind": "read",
+              "action": "Read how the configuration file is located.",
+              "expected": "Decide whether another file is being read."
+            },
+            {
+              "id": "docs",
+              "kind": "read",
+              "action": "Read the documentation for the precedence rule.",
+              "expected": "Decide what the documented precedence is."
+            }
+          ],
+          "oracle": "merge-order",
+          "why": "Triệu chứng nói cả hai nguồn đều có mặt và file thắng, nên chỗ sai là thứ tự hợp nhất."
+        },
+        {
+          "id": "F26",
+          "kind": "edit",
+          "goal": "Choose the repair that makes the documented precedence true.",
+          "contract": "the environment must win when set, and a missing environment value must fall back to the file",
+          "state": "Contract: the environment must win when set, and a missing environment value must fall back to the file; no new dependency may be added.",
+          "candidates": [
+            {
+              "id": "env-last",
+              "kind": "edit",
+              "action": "Load the file first and apply environment values afterwards.",
+              "expected": "A set environment variable wins while the file still fills the gaps."
+            },
+            {
+              "id": "env-first",
+              "kind": "edit",
+              "action": "Apply environment values first and the file afterwards.",
+              "expected": "File values are applied last."
+            },
+            {
+              "id": "drop-file",
+              "kind": "edit",
+              "action": "Stop reading the file.",
+              "expected": "Only environment values are used."
+            },
+            {
+              "id": "duplicate-key",
+              "kind": "edit",
+              "action": "Read the variable twice, before and after the file.",
+              "expected": "The variable is read again after the file."
+            }
+          ],
+          "oracle": "env-last",
+          "why": "Env-first chính là lỗi hiện tại, drop-file phá fallback, đọc hai lần không nói nguồn nào thắng khi cả hai được set."
+        },
+        {
+          "id": "F27",
+          "kind": "check",
+          "goal": "Choose the check that would have caught this.",
+          "contract": "The check must fail when the file overrides the environment, and must not assert the loader's implementation.",
+          "state": "The defect let the file override the environment. The check must fail when the file overrides the environment, and must not assert the loader's implementation.",
+          "candidates": [
+            {
+              "id": "both-set",
+              "kind": "check",
+              "action": "Set both sources to different values and assert the environment's value is used.",
+              "expected": "The check fails while the file wins."
+            },
+            {
+              "id": "env-parsed",
+              "kind": "check",
+              "action": "Assert the environment value is parsed.",
+              "expected": "The check fails on an unparsed value."
+            },
+            {
+              "id": "file-exists",
+              "kind": "check",
+              "action": "Assert the configuration file exists.",
+              "expected": "The check fails when it is missing."
+            },
+            {
+              "id": "fallback",
+              "kind": "check",
+              "action": "Assert an unset variable takes the file's value.",
+              "expected": "The check fails when the fallback is broken."
+            }
+          ],
+          "oracle": "both-set",
+          "why": "Ba cái còn lại đều pass trong cấu hình có lỗi vì chúng không đặt cả hai nguồn cùng lúc."
+        }
+      ]
+    },
+    {
+      "id": "index-staleness",
+      "title": "Tìm kiếm trả nội dung cũ sau khi cập nhật",
+      "forks": [
+        {
+          "id": "F28",
+          "kind": "read",
+          "goal": "Choose the read that best explains stale search results.",
+          "contract": "The database write commits, search keeps returning the previous text until the process restarts.",
+          "state": "After an update, search returns the previous text. The database write commits, search keeps returning the previous text until the process restarts.",
+          "candidates": [
+            {
+              "id": "index-update",
+              "kind": "read",
+              "action": "Read the path that updates the search index after a write.",
+              "expected": "Decide whether the index is updated and how failures are handled."
+            },
+            {
+              "id": "write-transaction",
+              "kind": "read",
+              "action": "Read the transaction that commits the change.",
+              "expected": "Decide whether the write is visible to other readers."
+            },
+            {
+              "id": "query-path",
+              "kind": "read",
+              "action": "Read the search query path.",
+              "expected": "Decide whether results are filtered or cached."
+            },
+            {
+              "id": "warmup",
+              "kind": "read",
+              "action": "Read the startup warmup.",
+              "expected": "Decide what the restart rebuilds."
+            }
+          ],
+          "oracle": "index-update",
+          "why": "Contract nói dữ liệu đã commit nhưng nội dung cũ vẫn còn tới khi restart, nên chỗ sai là bước cập nhật index."
+        },
+        {
+          "id": "F29",
+          "kind": "edit",
+          "goal": "Choose the repair that keeps the index consistent with committed writes.",
+          "contract": "a failed index update must not leave the old document searchable, and the database write must still commit.",
+          "state": "Contract for the repair: a failed index update must not leave the old document searchable, and the database write must still commit.",
+          "candidates": [
+            {
+              "id": "same-unit",
+              "kind": "edit",
+              "action": "Delete the old document from the index and insert the new one inside the same write path.",
+              "expected": "Search reflects the committed write or holds nothing for that document."
+            },
+            {
+              "id": "rebuild-on-read",
+              "kind": "edit",
+              "action": "Rebuild the index on every read.",
+              "expected": "Search always reads fresh data."
+            },
+            {
+              "id": "swallow-error",
+              "kind": "edit",
+              "action": "Catch and ignore index update errors.",
+              "expected": "The write is never blocked by the index."
+            },
+            {
+              "id": "refresh-on-restart",
+              "kind": "edit",
+              "action": "Refresh the whole index at startup.",
+              "expected": "Stale entries disappear after a restart."
+            }
+          ],
+          "oracle": "same-unit",
+          "why": "Rebuild mỗi lần đọc phá hiệu năng, bỏ qua lỗi chính là nguyên nhân cũ, refresh lúc khởi động không sửa được trong lúc chạy."
+        },
+        {
+          "id": "F30",
+          "kind": "check",
+          "goal": "Choose the check that would have caught the stale result.",
+          "contract": "The check must fail while the index still holds the old text, and must not assert the index implementation.",
+          "state": "The defect left the old text searchable after an update. The check must fail while the index still holds the old text, and must not assert the index implementation.",
+          "candidates": [
+            {
+              "id": "update-then-search",
+              "kind": "check",
+              "action": "Update a document and assert search no longer returns the old text.",
+              "expected": "The check fails while the old text remains searchable."
+            },
+            {
+              "id": "index-call-count",
+              "kind": "check",
+              "action": "Assert the index update is called once per write.",
+              "expected": "The check fails on a missing call."
+            },
+            {
+              "id": "warmup-runs",
+              "kind": "check",
+              "action": "Assert the startup warmup runs.",
+              "expected": "The check fails when warmup is skipped."
+            },
+            {
+              "id": "doc-count",
+              "kind": "check",
+              "action": "Assert the document count is unchanged after an update.",
+              "expected": "The check fails when the count changes."
+            }
+          ],
+          "oracle": "update-then-search",
+          "why": "Ba cái còn lại pass trên bản lỗi: chúng chỉ kiểm lời gọi hoặc số lượng, không kiểm nội dung tìm được."
+        }
+      ]
+    }
+  ]
+}

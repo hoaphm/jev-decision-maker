@@ -1,0 +1,182 @@
+{
+  "generatedAt": "2026-09-21T05:28:23.155Z",
+  "protocol": {
+    "fixtureSet": [
+      "diagnostic-selection",
+      "patch-shortlist"
+    ],
+    "order": [
+      {
+        "fixture": "diagnostic-selection",
+        "repeat": 1,
+        "arm": "B"
+      },
+      {
+        "fixture": "diagnostic-selection",
+        "repeat": 1,
+        "arm": "J"
+      },
+      {
+        "fixture": "diagnostic-selection",
+        "repeat": 2,
+        "arm": "J"
+      },
+      {
+        "fixture": "diagnostic-selection",
+        "repeat": 2,
+        "arm": "B"
+      },
+      {
+        "fixture": "diagnostic-selection",
+        "repeat": 3,
+        "arm": "B"
+      },
+      {
+        "fixture": "diagnostic-selection",
+        "repeat": 3,
+        "arm": "J"
+      },
+      {
+        "fixture": "patch-shortlist",
+        "repeat": 1,
+        "arm": "J"
+      },
+      {
+        "fixture": "patch-shortlist",
+        "repeat": 1,
+        "arm": "B"
+      },
+      {
+        "fixture": "patch-shortlist",
+        "repeat": 2,
+        "arm": "B"
+      },
+      {
+        "fixture": "patch-shortlist",
+        "repeat": 2,
+        "arm": "J"
+      },
+      {
+        "fixture": "patch-shortlist",
+        "repeat": 3,
+        "arm": "J"
+      },
+      {
+        "fixture": "patch-shortlist",
+        "repeat": 3,
+        "arm": "B"
+      }
+    ],
+    "repeats": [
+      1,
+      2,
+      3
+    ],
+    "extension": "<repo>/src/decision-maker.ts",
+    "mainModel": "9router/cx/gpt-5.6-terra:high",
+    "mainModelRole": "@default",
+    "jevModelPrefix": "typesafe/jev-",
+    "toolsBaseline": "read,write,bash",
+    "toolsTreatment": "read,write,bash,decision_maker",
+    "sessionMaxTime": "3m",
+    "sessionTimeoutMs": 190000,
+    "commonPolicy": "Work only on the current task in this workspace.\n\n- Read only `brief.json`, `src/answer.json` and `tests/check.mjs`. Write only `src/answer.json`.\n- Verify with `bun tests/check.mjs` (that exact command is pre-approved; other shell commands may be refused).\n- No git, no dependency installs, no network beyond the tools you are given.\n- If a `decision_maker` tool is available and the task really forks between distinct options, use it:\n  `mode: \"select\"` to pick one next step, or `mode: \"score\"` with one ordered `rubric` to rate every\n  proposal in a single call instead of writing out each one yourself. Never invent options just to call\n  it, never call it once per candidate, and never call it for a step that is obvious or required.\n- Whatever the tool answers is a suggestion, not a verdict: the acceptance check is still the file you\n  write, and you are responsible for it.\n",
+    "agentsMd": "# Judgment fixture\n\nThe task is stated in the prompt and its data is in `brief.json`. Write your answer to\n`src/answer.json` and nothing else. `tests/check.mjs` is the public acceptance check: leave it\nexactly as it is and make `bun tests/check.mjs` pass.\n",
+    "prompts": {
+      "diagnostic-selection": "Read brief.json. Select the first diagnostic read using the supplied evidence and candidates. Write only {\"candidateId\":\"<id>\"} to src/answer.json. Do not execute the proposed action. Do not change brief.json or tests/check.mjs. Run bun tests/check.mjs.",
+      "patch-shortlist": "Read brief.json. Evaluate all five proposed repairs against the supplied ordered rubric, then choose the strongest supported repair. Write only {\"candidateId\":\"<id>\"} to src/answer.json. Do not implement the proposals, do not change brief.json or tests/check.mjs, and run bun tests/check.mjs."
+    },
+    "briefs": {
+      "diagnostic-selection": {
+        "goal": "Choose the first read that best distinguishes the cause of cross-tenant cached profiles.",
+        "evidence": "Tenant A reads id 7, then tenant B reads id 7 and receives A's profile. Calling the store directly for B returns B's correct profile. The error occurs only after A warms the cache. A trace already confirmed that the service forwards tenant B and id 7 unchanged to the cache. No source for the cache identity has been inspected yet.",
+        "candidates": [
+          {
+            "id": "cache-identity",
+            "kind": "read",
+            "action": "Read src/cache.mjs to identify the cache key and its tenant/id inputs.",
+            "expected": "Determine whether cache identity distinguishes tenants sharing an id."
+          },
+          {
+            "id": "service-forwarding",
+            "kind": "read",
+            "action": "Read src/service.mjs to inspect forwarding of tenant and id to the cache.",
+            "expected": "Determine whether the service passes the requested tenant and id."
+          },
+          {
+            "id": "store-query",
+            "kind": "read",
+            "action": "Read src/store.mjs to inspect the direct tenant filter.",
+            "expected": "Determine whether direct store lookup includes the requested tenant."
+          }
+        ]
+      },
+      "patch-shortlist": {
+        "goal": "Choose the proposed cache repair that preserves the stated contract.",
+        "evidence": "The current cache uses key=id. Tenants can share ids. Contract: same tenant/id reuses its cached value; different tenant/id pairs never share entries; ids and tenants may contain colons or be empty; undefined is a valid cached result; a throwing loader must not create an entry. Map.has/get/set behavior and loader call order are already correct. Change only the key expression unless a proposal explicitly says otherwise.",
+        "candidates": [
+          {
+            "id": "tuple-key",
+            "kind": "edit",
+            "action": "Replace only key=id with key=JSON.stringify([tenantId,id]); keep Map.has/get/set and loader ordering.",
+            "expected": "Cache identity separates tenant/id pairs without changing cache behavior."
+          },
+          {
+            "id": "colon-key",
+            "kind": "edit",
+            "action": "Replace only key=id with key=tenantId+\":\"+id; keep other logic.",
+            "expected": "Cache identity uses tenant and id joined by a colon."
+          },
+          {
+            "id": "tenant-only",
+            "kind": "edit",
+            "action": "Replace only key=id with key=tenantId; keep other logic.",
+            "expected": "Each tenant uses a tenant-specific cache entry."
+          },
+          {
+            "id": "no-cache",
+            "kind": "edit",
+            "action": "Delete Map storage and call load() for every get.",
+            "expected": "No request can reuse another request's cached value."
+          },
+          {
+            "id": "truthy-cache",
+            "kind": "edit",
+            "action": "Use JSON.stringify([tenantId,id]) as key, but replace Map.has with if (!entries.get(key)) before loading.",
+            "expected": "Tenant/id pairs use distinct keys and missing values trigger a load."
+          }
+        ]
+      }
+    },
+    "publicChecks": {
+      "diagnostic-selection": "4d18843177f96e1c377c357297b2b6d738065f0756d1bff5659d481f6db98e77",
+      "patch-shortlist": "2a6729887ff489acf20b28dee9ff5a51cdf4cc7d52ff381454d8658d79a395a2"
+    },
+    "privateGraders": {
+      "diagnostic-selection": "38e85f4bf75ff667abb34db28f902963684e2a681698b3910ac1c4e0b0629e50",
+      "patch-shortlist": "509e9c6317869a403cdbbe405916ef33e259f206559f25029ada61078e5d4cc6"
+    },
+    "briefHashes": {
+      "diagnostic-selection": "56019aa0a82498f21a7a81bcda6f710bfca0426388cd2ca5e589c2fcd3f1821a",
+      "patch-shortlist": "3787d8dfcf356e9d960fbcd6063e16c8533b8162797c7c1ab094957f8528fb6d"
+    },
+    "baselineHasCredential": false,
+    "budget": {
+      "maxPromptSessions": 12,
+      "maxJevRequests": 32,
+      "callLimitPerSession": 5,
+      "retries": 0
+    }
+  },
+  "beforeInputs": {
+    "<repo>/src/decision-maker.ts": "c949a60a46db86277f4eb88bf75237f4c397f90a61609aed86a5236900161913",
+    "<repo>/src/setup-command.ts": "d50c6c4f10a1f1e01476f40940dcf9c90849bd397236aac87217671bdadf2e0d",
+    "<repo>/rules/decision-maker.md": "61be58bd15ad9cf3596ac8cf4da700b29a6754058ffb5760c5adc38f4a7fdee3",
+    "<repo>/README.md": "ff890cccc9b1a81faeb5885175f79f57741fa64cf9805027ab48a7b229d34e8b",
+    "<repo>/CONTEXT.md": "8d1db662feb19dc69efcb7f24569a155d44fc963ad37abc1919d9c07ff292528",
+    "<repo>/package.json": "f95936e3bdd9dbf728812516b5a01e5bc544336d6bf34285570545ce997acb92",
+    "<repo>/.omp/config.yml": "18c34cfd44ebf4a42074f82b5b933207e295e8096989a487d5d524979082764a",
+    "<repo>/scripts/benchmark-decision-maker.ts": "f5b08b68a2ffeadc10be3483bfc609b7b8ea669369d414ccedfa4b7a457e30f2",
+    "<home>/.omp/agent/sessions/-jev-decision-maker/2026-09-21T03-24-18-898Z_01a0c1fe-3a51-712d-944c-c1272ed73b2a/local/jev-effective-runner.ts": "0c26083a48b9ff9b5687f16c9b5b14eb4cd40756ac780bf682b5d4d5359c1d12"
+  }
+}

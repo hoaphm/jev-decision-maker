@@ -1,0 +1,34 @@
+{
+  "passed": true,
+  "reason": "ok",
+  "agentTurns": false,
+  "ackWithoutAgentTurn": true,
+  "select": {
+    "requests": 1,
+    "requestBytes": 1571,
+    "questionCount": 1,
+    "status": "selected",
+    "reason": "selected",
+    "candidateId": "cache-identity",
+    "model": "typesafe/jev-1.13-20260917",
+    "latencyMs": 1005.624,
+    "costUsd": 0.000025998
+  },
+  "score": {
+    "requests": 1,
+    "requestBytes": 5377,
+    "questionCount": 5,
+    "status": "scored",
+    "reason": "scored",
+    "model": "typesafe/jev-1.13-20260917",
+    "latencyMs": 420.975,
+    "costUsd": 0.000064008,
+    "scoredIds": [
+      "tuple-key",
+      "colon-key",
+      "tenant-only",
+      "no-cache",
+      "truthy-cache"
+    ]
+  }
+}

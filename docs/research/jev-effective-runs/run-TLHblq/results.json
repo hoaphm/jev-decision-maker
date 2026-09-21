@@ -1,0 +1,1295 @@
+{
+  "generatedAt": "2026-09-21T05:35:08.261Z",
+  "batch": "judgment",
+  "runDir": "<local>/jev-effective-results/run-TLHblq",
+  "versions": {
+    "omp": "omp/18.2.7",
+    "bun": "1.3.14"
+  },
+  "protocol": {
+    "fixtureSet": [
+      "diagnostic-selection",
+      "patch-shortlist"
+    ],
+    "order": [
+      {
+        "fixture": "diagnostic-selection",
+        "repeat": 1,
+        "arm": "B"
+      },
+      {
+        "fixture": "diagnostic-selection",
+        "repeat": 1,
+        "arm": "J"
+      },
+      {
+        "fixture": "diagnostic-selection",
+        "repeat": 2,
+        "arm": "J"
+      },
+      {
+        "fixture": "diagnostic-selection",
+        "repeat": 2,
+        "arm": "B"
+      },
+      {
+        "fixture": "diagnostic-selection",
+        "repeat": 3,
+        "arm": "B"
+      },
+      {
+        "fixture": "diagnostic-selection",
+        "repeat": 3,
+        "arm": "J"
+      },
+      {
+        "fixture": "patch-shortlist",
+        "repeat": 1,
+        "arm": "J"
+      },
+      {
+        "fixture": "patch-shortlist",
+        "repeat": 1,
+        "arm": "B"
+      },
+      {
+        "fixture": "patch-shortlist",
+        "repeat": 2,
+        "arm": "B"
+      },
+      {
+        "fixture": "patch-shortlist",
+        "repeat": 2,
+        "arm": "J"
+      },
+      {
+        "fixture": "patch-shortlist",
+        "repeat": 3,
+        "arm": "J"
+      },
+      {
+        "fixture": "patch-shortlist",
+        "repeat": 3,
+        "arm": "B"
+      }
+    ],
+    "repeats": [
+      1,
+      2,
+      3
+    ],
+    "extension": "<repo>/src/decision-maker.ts",
+    "mainModel": "9router/cx/gpt-5.6-terra:high",
+    "mainModelRole": "@default",
+    "jevModelPrefix": "typesafe/jev-",
+    "toolsBaseline": "read,write,bash",
+    "toolsTreatment": "read,write,bash,decision_maker",
+    "sessionMaxTime": "3m",
+    "sessionTimeoutMs": 190000,
+    "commonPolicy": "Work only on the current task in this workspace.\n\n- Read only `brief.json`, `src/answer.json` and `tests/check.mjs`. Write only `src/answer.json`.\n- Verify with `bun tests/check.mjs` (that exact command is pre-approved; other shell commands may be refused).\n- No git, no dependency installs, no network beyond the tools you are given.\n- If a `decision_maker` tool is available and the task really forks between distinct options, use it:\n  `mode: \"select\"` to pick one next step, or `mode: \"score\"` with one ordered `rubric` to rate every\n  proposal in a single call instead of writing out each one yourself. Never invent options just to call\n  it, never call it once per candidate, and never call it for a step that is obvious or required.\n- Whatever the tool answers is a suggestion, not a verdict: the acceptance check is still the file you\n  write, and you are responsible for it.\n",
+    "agentsMd": "# Judgment fixture\n\nThe task is stated in the prompt and its data is in `brief.json`. Write your answer to\n`src/answer.json` and nothing else. `tests/check.mjs` is the public acceptance check: leave it\nexactly as it is and make `bun tests/check.mjs` pass.\n",
+    "prompts": {
+      "diagnostic-selection": "Read brief.json. Select the first diagnostic read using the supplied evidence and candidates. Write only {\"candidateId\":\"<id>\"} to src/answer.json. Do not execute the proposed action. Do not change brief.json or tests/check.mjs. Run bun tests/check.mjs.",
+      "patch-shortlist": "Read brief.json. Evaluate all five proposed repairs against the supplied ordered rubric, then choose the strongest supported repair. Write only {\"candidateId\":\"<id>\"} to src/answer.json. Do not implement the proposals, do not change brief.json or tests/check.mjs, and run bun tests/check.mjs."
+    },
+    "briefs": {
+      "diagnostic-selection": {
+        "goal": "Choose the first read that best distinguishes the cause of cross-tenant cached profiles.",
+        "evidence": "Tenant A reads id 7, then tenant B reads id 7 and receives A's profile. Calling the store directly for B returns B's correct profile. The error occurs only after A warms the cache. A trace already confirmed that the service forwards tenant B and id 7 unchanged to the cache. No source for the cache identity has been inspected yet.",
+        "candidates": [
+          {
+            "id": "cache-identity",
+            "kind": "read",
+            "action": "Read src/cache.mjs to identify the cache key and its tenant/id inputs.",
+            "expected": "Determine whether cache identity distinguishes tenants sharing an id."
+          },
+          {
+            "id": "service-forwarding",
+            "kind": "read",
+            "action": "Read src/service.mjs to inspect forwarding of tenant and id to the cache.",
+            "expected": "Determine whether the service passes the requested tenant and id."
+          },
+          {
+            "id": "store-query",
+            "kind": "read",
+            "action": "Read src/store.mjs to inspect the direct tenant filter.",
+            "expected": "Determine whether direct store lookup includes the requested tenant."
+          }
+        ]
+      },
+      "patch-shortlist": {
+        "goal": "Choose the proposed cache repair that preserves the stated contract.",
+        "evidence": "The current cache uses key=id. Tenants can share ids. Contract: same tenant/id reuses its cached value; different tenant/id pairs never share entries; ids and tenants may contain colons or be empty; undefined is a valid cached result; a throwing loader must not create an entry. Map.has/get/set behavior and loader call order are already correct. Change only the key expression unless a proposal explicitly says otherwise.",
+        "rubric": [
+          "Contradicts at least one explicit contract requirement",
+          "No contradiction shown, but the proposal provides no support for the required behavior",
+          "Partially supported; a required behavior remains unspecified",
+          "Supported with a stated unresolved caveat",
+          "Directly supported for every stated requirement with no known contradiction"
+        ],
+        "candidates": [
+          {
+            "id": "tuple-key",
+            "kind": "edit",
+            "action": "Replace only key=id with key=JSON.stringify([tenantId,id]); keep Map.has/get/set and loader ordering.",
+            "expected": "Cache identity separates tenant/id pairs without changing cache behavior."
+          },
+          {
+            "id": "colon-key",
+            "kind": "edit",
+            "action": "Replace only key=id with key=tenantId+\":\"+id; keep other logic.",
+            "expected": "Cache identity uses tenant and id joined by a colon."
+          },
+          {
+            "id": "tenant-only",
+            "kind": "edit",
+            "action": "Replace only key=id with key=tenantId; keep other logic.",
+            "expected": "Each tenant uses a tenant-specific cache entry."
+          },
+          {
+            "id": "no-cache",
+            "kind": "edit",
+            "action": "Delete Map storage and call load() for every get.",
+            "expected": "No request can reuse another request's cached value."
+          },
+          {
+            "id": "truthy-cache",
+            "kind": "edit",
+            "action": "Use JSON.stringify([tenantId,id]) as key, but replace Map.has with if (!entries.get(key)) before loading.",
+            "expected": "Tenant/id pairs use distinct keys and missing values trigger a load."
+          }
+        ]
+      }
+    },
+    "publicChecks": {
+      "diagnostic-selection": "4d18843177f96e1c377c357297b2b6d738065f0756d1bff5659d481f6db98e77",
+      "patch-shortlist": "2a6729887ff489acf20b28dee9ff5a51cdf4cc7d52ff381454d8658d79a395a2"
+    },
+    "privateGraders": {
+      "diagnostic-selection": "38e85f4bf75ff667abb34db28f902963684e2a681698b3910ac1c4e0b0629e50",
+      "patch-shortlist": "509e9c6317869a403cdbbe405916ef33e259f206559f25029ada61078e5d4cc6"
+    },
+    "briefHashes": {
+      "diagnostic-selection": "56019aa0a82498f21a7a81bcda6f710bfca0426388cd2ca5e589c2fcd3f1821a",
+      "patch-shortlist": "55e25a063d93c07e3060d2d45f740eba1658c618b1d99e141dd13d281391ebec"
+    },
+    "baselineHasCredential": false,
+    "budget": {
+      "maxPromptSessions": 12,
+      "maxJevRequests": 32,
+      "callLimitPerSession": 5,
+      "retries": 0
+    }
+  },
+  "credentialSource": "omp-store-readonly-to-isolated-env",
+  "credentialVisibleToChild": true,
+  "smoke": {
+    "passed": true,
+    "reason": "ok",
+    "agentTurns": false,
+    "ackWithoutAgentTurn": true,
+    "select": {
+      "requests": 1,
+      "requestBytes": 1571,
+      "questionCount": 1,
+      "status": "selected",
+      "reason": "selected",
+      "candidateId": "cache-identity",
+      "model": "typesafe/jev-1.13-20260917",
+      "latencyMs": 1005.624,
+      "costUsd": 0.000025998
+    },
+    "score": {
+      "requests": 1,
+      "requestBytes": 5377,
+      "questionCount": 5,
+      "status": "scored",
+      "reason": "scored",
+      "model": "typesafe/jev-1.13-20260917",
+      "latencyMs": 420.975,
+      "costUsd": 0.000064008,
+      "scoredIds": [
+        "tuple-key",
+        "colon-key",
+        "tenant-only",
+        "no-cache",
+        "truthy-cache"
+      ]
+    }
+  },
+  "sessions": [
+    {
+      "fixture": "diagnostic-selection",
+      "repeat": 1,
+      "arm": "B",
+      "agentMs": 23873.6,
+      "wallMs": 23921.3,
+      "agentExitCode": 0,
+      "agentTimedOut": false,
+      "publicCheck": "passed",
+      "grader": "passed",
+      "taskPassed": true,
+      "failure": null,
+      "briefUnmodified": true,
+      "testsUnmodified": true,
+      "graderUnmodified": true,
+      "mainModels": [
+        "9router/cx/gpt-5.6-terra"
+      ],
+      "turns": 4,
+      "toolCounts": {
+        "read": 3,
+        "write": 1,
+        "bash": 1
+      },
+      "toolCallSequence": [
+        "read",
+        "read",
+        "read",
+        "write",
+        "bash"
+      ],
+      "missingToolEnds": [],
+      "extensionErrors": 0,
+      "decisionCalls": 0,
+      "decisions": [],
+      "selected": 0,
+      "scored": 0,
+      "deferred": 0,
+      "uncertain": 0,
+      "clientFailures": 0,
+      "clientFailureReasons": [],
+      "jevLatencyMs": [],
+      "jevCostUsd": [],
+      "usageTotals": {
+        "input": 12482,
+        "output": 232,
+        "cacheRead": 10240,
+        "cacheWrite": 0,
+        "totalTokens": 22954,
+        "reasoningTokens": null
+      },
+      "costStatus": "reported",
+      "mainCostUsd": 0.029796,
+      "totalCostUsd": 0.029796,
+      "finalCandidateId": "cache-identity",
+      "finalMatchesSelection": null,
+      "finalInTopScoreSet": null,
+      "transcriptPath": "<local>/jev-effective-results/run-TLHblq/diagnostic-selection-1B.jsonl",
+      "envKeys": [
+        "HOME",
+        "JEV_DECISION_MAKER",
+        "LANG",
+        "PATH",
+        "TERM",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_STATE_HOME"
+      ]
+    },
+    {
+      "fixture": "diagnostic-selection",
+      "repeat": 1,
+      "arm": "J",
+      "agentMs": 31511.4,
+      "wallMs": 31560.7,
+      "agentExitCode": 0,
+      "agentTimedOut": false,
+      "publicCheck": "passed",
+      "grader": "passed",
+      "taskPassed": true,
+      "failure": null,
+      "briefUnmodified": true,
+      "testsUnmodified": true,
+      "graderUnmodified": true,
+      "mainModels": [
+        "9router/cx/gpt-5.6-terra"
+      ],
+      "turns": 4,
+      "toolCounts": {
+        "read": 3,
+        "write": 1,
+        "bash": 1
+      },
+      "toolCallSequence": [
+        "read",
+        "read",
+        "read",
+        "write",
+        "bash"
+      ],
+      "missingToolEnds": [],
+      "extensionErrors": 0,
+      "decisionCalls": 0,
+      "decisions": [],
+      "selected": 0,
+      "scored": 0,
+      "deferred": 0,
+      "uncertain": 0,
+      "clientFailures": 0,
+      "clientFailureReasons": [],
+      "jevLatencyMs": [],
+      "jevCostUsd": [],
+      "usageTotals": {
+        "input": 8203,
+        "output": 314,
+        "cacheRead": 16896,
+        "cacheWrite": 0,
+        "totalTokens": 25413,
+        "reasoningTokens": null
+      },
+      "costStatus": "reported",
+      "mainCostUsd": 0.023553,
+      "totalCostUsd": 0.023553,
+      "finalCandidateId": "cache-identity",
+      "finalMatchesSelection": null,
+      "finalInTopScoreSet": null,
+      "transcriptPath": "<local>/jev-effective-results/run-TLHblq/diagnostic-selection-1J.jsonl",
+      "envKeys": [
+        "HOME",
+        "JEV_DECISION_MAKER",
+        "LANG",
+        "OPENROUTER_API_KEY",
+        "PATH",
+        "TERM",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_STATE_HOME"
+      ]
+    },
+    {
+      "fixture": "diagnostic-selection",
+      "repeat": 2,
+      "arm": "J",
+      "agentMs": 22351.4,
+      "wallMs": 22401.1,
+      "agentExitCode": 0,
+      "agentTimedOut": false,
+      "publicCheck": "passed",
+      "grader": "passed",
+      "taskPassed": true,
+      "failure": null,
+      "briefUnmodified": true,
+      "testsUnmodified": true,
+      "graderUnmodified": true,
+      "mainModels": [
+        "9router/cx/gpt-5.6-terra"
+      ],
+      "turns": 4,
+      "toolCounts": {
+        "read": 3,
+        "write": 1,
+        "bash": 1
+      },
+      "toolCallSequence": [
+        "read",
+        "read",
+        "read",
+        "write",
+        "bash"
+      ],
+      "missingToolEnds": [],
+      "extensionErrors": 0,
+      "decisionCalls": 0,
+      "decisions": [],
+      "selected": 0,
+      "scored": 0,
+      "deferred": 0,
+      "uncertain": 0,
+      "clientFailures": 0,
+      "clientFailureReasons": [],
+      "jevLatencyMs": [],
+      "jevCostUsd": [],
+      "usageTotals": {
+        "input": 13743,
+        "output": 250,
+        "cacheRead": 11264,
+        "cacheWrite": 0,
+        "totalTokens": 25257,
+        "reasoningTokens": null
+      },
+      "costStatus": "reported",
+      "mainCostUsd": 0.032739,
+      "totalCostUsd": 0.032739,
+      "finalCandidateId": "cache-identity",
+      "finalMatchesSelection": null,
+      "finalInTopScoreSet": null,
+      "transcriptPath": "<local>/jev-effective-results/run-TLHblq/diagnostic-selection-2J.jsonl",
+      "envKeys": [
+        "HOME",
+        "JEV_DECISION_MAKER",
+        "LANG",
+        "OPENROUTER_API_KEY",
+        "PATH",
+        "TERM",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_STATE_HOME"
+      ]
+    },
+    {
+      "fixture": "diagnostic-selection",
+      "repeat": 2,
+      "arm": "B",
+      "agentMs": 21800.6,
+      "wallMs": 21851.7,
+      "agentExitCode": 0,
+      "agentTimedOut": false,
+      "publicCheck": "passed",
+      "grader": "passed",
+      "taskPassed": true,
+      "failure": null,
+      "briefUnmodified": true,
+      "testsUnmodified": true,
+      "graderUnmodified": true,
+      "mainModels": [
+        "9router/cx/gpt-5.6-terra"
+      ],
+      "turns": 4,
+      "toolCounts": {
+        "read": 3,
+        "write": 1,
+        "bash": 1
+      },
+      "toolCallSequence": [
+        "read",
+        "read",
+        "read",
+        "write",
+        "bash"
+      ],
+      "missingToolEnds": [],
+      "extensionErrors": 0,
+      "decisionCalls": 0,
+      "decisions": [],
+      "selected": 0,
+      "scored": 0,
+      "deferred": 0,
+      "uncertain": 0,
+      "clientFailures": 0,
+      "clientFailureReasons": [],
+      "jevLatencyMs": [],
+      "jevCostUsd": [],
+      "usageTotals": {
+        "input": 6894,
+        "output": 253,
+        "cacheRead": 15872,
+        "cacheWrite": 0,
+        "totalTokens": 23019,
+        "reasoningTokens": null
+      },
+      "costStatus": "reported",
+      "mainCostUsd": 0.019998,
+      "totalCostUsd": 0.019998,
+      "finalCandidateId": "cache-identity",
+      "finalMatchesSelection": null,
+      "finalInTopScoreSet": null,
+      "transcriptPath": "<local>/jev-effective-results/run-TLHblq/diagnostic-selection-2B.jsonl",
+      "envKeys": [
+        "HOME",
+        "JEV_DECISION_MAKER",
+        "LANG",
+        "PATH",
+        "TERM",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_STATE_HOME"
+      ]
+    },
+    {
+      "fixture": "diagnostic-selection",
+      "repeat": 3,
+      "arm": "B",
+      "agentMs": 24536.6,
+      "wallMs": 24587,
+      "agentExitCode": 0,
+      "agentTimedOut": false,
+      "publicCheck": "passed",
+      "grader": "passed",
+      "taskPassed": true,
+      "failure": null,
+      "briefUnmodified": true,
+      "testsUnmodified": true,
+      "graderUnmodified": true,
+      "mainModels": [
+        "9router/cx/gpt-5.6-terra"
+      ],
+      "turns": 4,
+      "toolCounts": {
+        "read": 3,
+        "write": 1,
+        "bash": 1
+      },
+      "toolCallSequence": [
+        "read",
+        "read",
+        "read",
+        "write",
+        "bash"
+      ],
+      "missingToolEnds": [],
+      "extensionErrors": 0,
+      "decisionCalls": 0,
+      "decisions": [],
+      "selected": 0,
+      "scored": 0,
+      "deferred": 0,
+      "uncertain": 0,
+      "clientFailures": 0,
+      "clientFailureReasons": [],
+      "jevLatencyMs": [],
+      "jevCostUsd": [],
+      "usageTotals": {
+        "input": 12517,
+        "output": 241,
+        "cacheRead": 10240,
+        "cacheWrite": 0,
+        "totalTokens": 22998,
+        "reasoningTokens": null
+      },
+      "costStatus": "reported",
+      "mainCostUsd": 0.029974,
+      "totalCostUsd": 0.029974,
+      "finalCandidateId": "cache-identity",
+      "finalMatchesSelection": null,
+      "finalInTopScoreSet": null,
+      "transcriptPath": "<local>/jev-effective-results/run-TLHblq/diagnostic-selection-3B.jsonl",
+      "envKeys": [
+        "HOME",
+        "JEV_DECISION_MAKER",
+        "LANG",
+        "PATH",
+        "TERM",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_STATE_HOME"
+      ]
+    },
+    {
+      "fixture": "diagnostic-selection",
+      "repeat": 3,
+      "arm": "J",
+      "agentMs": 23528,
+      "wallMs": 23574.9,
+      "agentExitCode": 0,
+      "agentTimedOut": false,
+      "publicCheck": "passed",
+      "grader": "passed",
+      "taskPassed": true,
+      "failure": null,
+      "briefUnmodified": true,
+      "testsUnmodified": true,
+      "graderUnmodified": true,
+      "mainModels": [
+        "9router/cx/gpt-5.6-terra"
+      ],
+      "turns": 4,
+      "toolCounts": {
+        "read": 3,
+        "write": 1,
+        "bash": 1
+      },
+      "toolCallSequence": [
+        "read",
+        "read",
+        "read",
+        "write",
+        "bash"
+      ],
+      "missingToolEnds": [],
+      "extensionErrors": 0,
+      "decisionCalls": 0,
+      "decisions": [],
+      "selected": 0,
+      "scored": 0,
+      "deferred": 0,
+      "uncertain": 0,
+      "clientFailures": 0,
+      "clientFailureReasons": [],
+      "jevLatencyMs": [],
+      "jevCostUsd": [],
+      "usageTotals": {
+        "input": 13804,
+        "output": 298,
+        "cacheRead": 11264,
+        "cacheWrite": 0,
+        "totalTokens": 25366,
+        "reasoningTokens": null
+      },
+      "costStatus": "reported",
+      "mainCostUsd": 0.033437,
+      "totalCostUsd": 0.033437,
+      "finalCandidateId": "cache-identity",
+      "finalMatchesSelection": null,
+      "finalInTopScoreSet": null,
+      "transcriptPath": "<local>/jev-effective-results/run-TLHblq/diagnostic-selection-3J.jsonl",
+      "envKeys": [
+        "HOME",
+        "JEV_DECISION_MAKER",
+        "LANG",
+        "OPENROUTER_API_KEY",
+        "PATH",
+        "TERM",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_STATE_HOME"
+      ]
+    },
+    {
+      "fixture": "patch-shortlist",
+      "repeat": 1,
+      "arm": "J",
+      "agentMs": 22601.6,
+      "wallMs": 22670.9,
+      "agentExitCode": 0,
+      "agentTimedOut": false,
+      "publicCheck": "passed",
+      "grader": "passed",
+      "taskPassed": true,
+      "failure": null,
+      "briefUnmodified": true,
+      "testsUnmodified": true,
+      "graderUnmodified": true,
+      "mainModels": [
+        "9router/cx/gpt-5.6-terra"
+      ],
+      "turns": 4,
+      "toolCounts": {
+        "read": 3,
+        "write": 1,
+        "bash": 1
+      },
+      "toolCallSequence": [
+        "read",
+        "read",
+        "read",
+        "write",
+        "bash"
+      ],
+      "missingToolEnds": [],
+      "extensionErrors": 0,
+      "decisionCalls": 0,
+      "decisions": [],
+      "selected": 0,
+      "scored": 0,
+      "deferred": 0,
+      "uncertain": 0,
+      "clientFailures": 0,
+      "clientFailureReasons": [],
+      "jevLatencyMs": [],
+      "jevCostUsd": [],
+      "usageTotals": {
+        "input": 11519,
+        "output": 363,
+        "cacheRead": 14336,
+        "cacheWrite": 0,
+        "totalTokens": 26218,
+        "reasoningTokens": null
+      },
+      "costStatus": "reported",
+      "mainCostUsd": 0.030261,
+      "totalCostUsd": 0.030261,
+      "finalCandidateId": "tuple-key",
+      "finalMatchesSelection": null,
+      "finalInTopScoreSet": null,
+      "transcriptPath": "<local>/jev-effective-results/run-TLHblq/patch-shortlist-1J.jsonl",
+      "envKeys": [
+        "HOME",
+        "JEV_DECISION_MAKER",
+        "LANG",
+        "OPENROUTER_API_KEY",
+        "PATH",
+        "TERM",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_STATE_HOME"
+      ]
+    },
+    {
+      "fixture": "patch-shortlist",
+      "repeat": 1,
+      "arm": "B",
+      "agentMs": 21129.6,
+      "wallMs": 21179.6,
+      "agentExitCode": 0,
+      "agentTimedOut": false,
+      "publicCheck": "passed",
+      "grader": "passed",
+      "taskPassed": true,
+      "failure": null,
+      "briefUnmodified": true,
+      "testsUnmodified": true,
+      "graderUnmodified": true,
+      "mainModels": [
+        "9router/cx/gpt-5.6-terra"
+      ],
+      "turns": 4,
+      "toolCounts": {
+        "read": 2,
+        "write": 1,
+        "bash": 1
+      },
+      "toolCallSequence": [
+        "read",
+        "read",
+        "write",
+        "bash"
+      ],
+      "missingToolEnds": [],
+      "extensionErrors": 0,
+      "decisionCalls": 0,
+      "decisions": [],
+      "selected": 0,
+      "scored": 0,
+      "deferred": 0,
+      "uncertain": 0,
+      "clientFailures": 0,
+      "clientFailureReasons": [],
+      "jevLatencyMs": [],
+      "jevCostUsd": [],
+      "usageTotals": {
+        "input": 13178,
+        "output": 252,
+        "cacheRead": 10240,
+        "cacheWrite": 0,
+        "totalTokens": 23670,
+        "reasoningTokens": null
+      },
+      "costStatus": "reported",
+      "mainCostUsd": 0.031428,
+      "totalCostUsd": 0.031428,
+      "finalCandidateId": "tuple-key",
+      "finalMatchesSelection": null,
+      "finalInTopScoreSet": null,
+      "transcriptPath": "<local>/jev-effective-results/run-TLHblq/patch-shortlist-1B.jsonl",
+      "envKeys": [
+        "HOME",
+        "JEV_DECISION_MAKER",
+        "LANG",
+        "PATH",
+        "TERM",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_STATE_HOME"
+      ]
+    },
+    {
+      "fixture": "patch-shortlist",
+      "repeat": 2,
+      "arm": "B",
+      "agentMs": 21704.4,
+      "wallMs": 21802.6,
+      "agentExitCode": 0,
+      "agentTimedOut": false,
+      "publicCheck": "passed",
+      "grader": "passed",
+      "taskPassed": true,
+      "failure": null,
+      "briefUnmodified": true,
+      "testsUnmodified": true,
+      "graderUnmodified": true,
+      "mainModels": [
+        "9router/cx/gpt-5.6-terra"
+      ],
+      "turns": 4,
+      "toolCounts": {
+        "read": 3,
+        "write": 1,
+        "bash": 1
+      },
+      "toolCallSequence": [
+        "read",
+        "read",
+        "read",
+        "write",
+        "bash"
+      ],
+      "missingToolEnds": [],
+      "extensionErrors": 0,
+      "decisionCalls": 0,
+      "decisions": [],
+      "selected": 0,
+      "scored": 0,
+      "deferred": 0,
+      "uncertain": 0,
+      "clientFailures": 0,
+      "clientFailureReasons": [],
+      "jevLatencyMs": [],
+      "jevCostUsd": [],
+      "usageTotals": {
+        "input": 13247,
+        "output": 268,
+        "cacheRead": 10240,
+        "cacheWrite": 0,
+        "totalTokens": 23755,
+        "reasoningTokens": null
+      },
+      "costStatus": "reported",
+      "mainCostUsd": 0.031758,
+      "totalCostUsd": 0.031758,
+      "finalCandidateId": "tuple-key",
+      "finalMatchesSelection": null,
+      "finalInTopScoreSet": null,
+      "transcriptPath": "<local>/jev-effective-results/run-TLHblq/patch-shortlist-2B.jsonl",
+      "envKeys": [
+        "HOME",
+        "JEV_DECISION_MAKER",
+        "LANG",
+        "PATH",
+        "TERM",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_STATE_HOME"
+      ]
+    },
+    {
+      "fixture": "patch-shortlist",
+      "repeat": 2,
+      "arm": "J",
+      "agentMs": 43929.8,
+      "wallMs": 43987,
+      "agentExitCode": 0,
+      "agentTimedOut": false,
+      "publicCheck": "passed",
+      "grader": "passed",
+      "taskPassed": true,
+      "failure": null,
+      "briefUnmodified": true,
+      "testsUnmodified": true,
+      "graderUnmodified": true,
+      "mainModels": [
+        "9router/cx/gpt-5.6-terra"
+      ],
+      "turns": 5,
+      "toolCounts": {
+        "read": 3,
+        "decision_maker": 1,
+        "write": 1,
+        "bash": 1
+      },
+      "toolCallSequence": [
+        "read",
+        "read",
+        "read",
+        "decision_maker",
+        "write",
+        "bash"
+      ],
+      "missingToolEnds": [],
+      "extensionErrors": 0,
+      "decisionCalls": 1,
+      "decisions": [
+        {
+          "callId": "call_UzI45hz2LdhGOexG5RLxrjGP|fc_02bf71f7f31bb932016ab0c1be855c87d0a07b203f400136e7",
+          "requestedMode": "score",
+          "candidateCount": 5,
+          "questionCount": 5,
+          "toolInputBytes": 1804,
+          "status": "scored",
+          "reason": "scored",
+          "candidateId": null,
+          "probability": null,
+          "model": "typesafe/jev-1.13-20260917",
+          "latencyMs": 635.876,
+          "costUsd": 0.000063462,
+          "scores": [
+            {
+              "candidateId": "tuple-key",
+              "score": 3.19
+            },
+            {
+              "candidateId": "colon-key",
+              "score": 0.57
+            },
+            {
+              "candidateId": "tenant-only",
+              "score": 0.01
+            },
+            {
+              "candidateId": "no-cache",
+              "score": 0
+            },
+            {
+              "candidateId": "truthy-cache",
+              "score": 0.15
+            }
+          ],
+          "topScoreIds": [
+            "tuple-key"
+          ],
+          "scoreTied": false
+        }
+      ],
+      "selected": 0,
+      "scored": 1,
+      "deferred": 0,
+      "uncertain": 0,
+      "clientFailures": 0,
+      "clientFailureReasons": [],
+      "jevLatencyMs": [
+        635.876
+      ],
+      "jevCostUsd": [
+        0.000063462
+      ],
+      "usageTotals": {
+        "input": 9891,
+        "output": 722,
+        "cacheRead": 24576,
+        "cacheWrite": 0,
+        "totalTokens": 35189,
+        "reasoningTokens": null
+      },
+      "costStatus": "reported",
+      "mainCostUsd": 0.033361,
+      "totalCostUsd": 0.033424,
+      "finalCandidateId": "tuple-key",
+      "finalMatchesSelection": null,
+      "finalInTopScoreSet": true,
+      "transcriptPath": "<local>/jev-effective-results/run-TLHblq/patch-shortlist-2J.jsonl",
+      "envKeys": [
+        "HOME",
+        "JEV_DECISION_MAKER",
+        "LANG",
+        "OPENROUTER_API_KEY",
+        "PATH",
+        "TERM",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_STATE_HOME"
+      ]
+    },
+    {
+      "fixture": "patch-shortlist",
+      "repeat": 3,
+      "arm": "J",
+      "agentMs": 24254,
+      "wallMs": 24308.7,
+      "agentExitCode": 0,
+      "agentTimedOut": false,
+      "publicCheck": "passed",
+      "grader": "passed",
+      "taskPassed": true,
+      "failure": null,
+      "briefUnmodified": true,
+      "testsUnmodified": true,
+      "graderUnmodified": true,
+      "mainModels": [
+        "9router/cx/gpt-5.6-terra"
+      ],
+      "turns": 4,
+      "toolCounts": {
+        "read": 3,
+        "write": 1,
+        "bash": 1
+      },
+      "toolCallSequence": [
+        "read",
+        "read",
+        "read",
+        "write",
+        "bash"
+      ],
+      "missingToolEnds": [],
+      "extensionErrors": 0,
+      "decisionCalls": 0,
+      "decisions": [],
+      "selected": 0,
+      "scored": 0,
+      "deferred": 0,
+      "uncertain": 0,
+      "clientFailures": 0,
+      "clientFailureReasons": [],
+      "jevLatencyMs": [],
+      "jevCostUsd": [],
+      "usageTotals": {
+        "input": 6419,
+        "output": 357,
+        "cacheRead": 19456,
+        "cacheWrite": 0,
+        "totalTokens": 26232,
+        "reasoningTokens": null
+      },
+      "costStatus": "reported",
+      "mainCostUsd": 0.021013,
+      "totalCostUsd": 0.021013,
+      "finalCandidateId": "tuple-key",
+      "finalMatchesSelection": null,
+      "finalInTopScoreSet": null,
+      "transcriptPath": "<local>/jev-effective-results/run-TLHblq/patch-shortlist-3J.jsonl",
+      "envKeys": [
+        "HOME",
+        "JEV_DECISION_MAKER",
+        "LANG",
+        "OPENROUTER_API_KEY",
+        "PATH",
+        "TERM",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_STATE_HOME"
+      ]
+    },
+    {
+      "fixture": "patch-shortlist",
+      "repeat": 3,
+      "arm": "B",
+      "agentMs": 22853.3,
+      "wallMs": 22928.6,
+      "agentExitCode": 0,
+      "agentTimedOut": false,
+      "publicCheck": "passed",
+      "grader": "passed",
+      "taskPassed": true,
+      "failure": null,
+      "briefUnmodified": true,
+      "testsUnmodified": true,
+      "graderUnmodified": true,
+      "mainModels": [
+        "9router/cx/gpt-5.6-terra"
+      ],
+      "turns": 4,
+      "toolCounts": {
+        "read": 3,
+        "write": 1,
+        "bash": 1
+      },
+      "toolCallSequence": [
+        "read",
+        "read",
+        "read",
+        "write",
+        "bash"
+      ],
+      "missingToolEnds": [],
+      "extensionErrors": 0,
+      "decisionCalls": 0,
+      "decisions": [],
+      "selected": 0,
+      "scored": 0,
+      "deferred": 0,
+      "uncertain": 0,
+      "clientFailures": 0,
+      "clientFailureReasons": [],
+      "jevLatencyMs": [],
+      "jevCostUsd": [],
+      "usageTotals": {
+        "input": 9087,
+        "output": 263,
+        "cacheRead": 14336,
+        "cacheWrite": 0,
+        "totalTokens": 23686,
+        "reasoningTokens": null
+      },
+      "costStatus": "reported",
+      "mainCostUsd": 0.024197,
+      "totalCostUsd": 0.024197,
+      "finalCandidateId": "tuple-key",
+      "finalMatchesSelection": null,
+      "finalInTopScoreSet": null,
+      "transcriptPath": "<local>/jev-effective-results/run-TLHblq/patch-shortlist-3B.jsonl",
+      "envKeys": [
+        "HOME",
+        "JEV_DECISION_MAKER",
+        "LANG",
+        "PATH",
+        "TERM",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_STATE_HOME"
+      ]
+    }
+  ],
+  "pairs": [
+    {
+      "fixture": "diagnostic-selection",
+      "repeat": 1,
+      "baselineAgentMs": 23873.6,
+      "treatmentAgentMs": 31511.4,
+      "agentRatio": 1.3199,
+      "baselineCostUsd": 0.029796,
+      "treatmentCostUsd": 0.023553,
+      "costRatio": 0.7905,
+      "treatmentFaster": false
+    },
+    {
+      "fixture": "diagnostic-selection",
+      "repeat": 2,
+      "baselineAgentMs": 21800.6,
+      "treatmentAgentMs": 22351.4,
+      "agentRatio": 1.0253,
+      "baselineCostUsd": 0.019998,
+      "treatmentCostUsd": 0.032739,
+      "costRatio": 1.6371,
+      "treatmentFaster": false
+    },
+    {
+      "fixture": "diagnostic-selection",
+      "repeat": 3,
+      "baselineAgentMs": 24536.6,
+      "treatmentAgentMs": 23528,
+      "agentRatio": 0.9589,
+      "baselineCostUsd": 0.029974,
+      "treatmentCostUsd": 0.033437,
+      "costRatio": 1.1155,
+      "treatmentFaster": true
+    },
+    {
+      "fixture": "patch-shortlist",
+      "repeat": 1,
+      "baselineAgentMs": 21129.6,
+      "treatmentAgentMs": 22601.6,
+      "agentRatio": 1.0697,
+      "baselineCostUsd": 0.031428,
+      "treatmentCostUsd": 0.030261,
+      "costRatio": 0.9629,
+      "treatmentFaster": false
+    },
+    {
+      "fixture": "patch-shortlist",
+      "repeat": 2,
+      "baselineAgentMs": 21704.4,
+      "treatmentAgentMs": 43929.8,
+      "agentRatio": 2.024,
+      "baselineCostUsd": 0.031758,
+      "treatmentCostUsd": 0.033424,
+      "costRatio": 1.0525,
+      "treatmentFaster": false
+    },
+    {
+      "fixture": "patch-shortlist",
+      "repeat": 3,
+      "baselineAgentMs": 22853.3,
+      "treatmentAgentMs": 24254,
+      "agentRatio": 1.0613,
+      "baselineCostUsd": 0.024197,
+      "treatmentCostUsd": 0.021013,
+      "costRatio": 0.8684,
+      "treatmentFaster": false
+    }
+  ],
+  "perFixture": [
+    {
+      "fixture": "diagnostic-selection",
+      "mode": "select",
+      "pairs": 3,
+      "agentMsBaseline": [
+        23873.6,
+        21800.6,
+        24536.6
+      ],
+      "agentMsTreatment": [
+        31511.4,
+        22351.4,
+        23528
+      ],
+      "medianAgentRatio": 1.0253,
+      "minAgentRatio": 0.9589,
+      "maxAgentRatio": 1.3199,
+      "fasterPairs": 1,
+      "costRatioKnownPairs": 3,
+      "medianCostRatio": 1.1155,
+      "tasksPassedBaseline": 3,
+      "tasksPassedTreatment": 3,
+      "sessionsBaseline": 3,
+      "sessionsTreatment": 3,
+      "jevRequests": 0,
+      "modesRequested": [],
+      "questionCounts": [],
+      "toolInputBytes": [],
+      "jevLatencyMs": [],
+      "jevCostUsd": [],
+      "selected": 0,
+      "scored": 0,
+      "deferred": 0,
+      "uncertain": 0,
+      "clientFailures": 0,
+      "finalMatchesSelection": null,
+      "finalInTopScoreSet": null,
+      "costStatus": "reported"
+    },
+    {
+      "fixture": "patch-shortlist",
+      "mode": "score",
+      "pairs": 3,
+      "agentMsBaseline": [
+        21129.6,
+        21704.4,
+        22853.3
+      ],
+      "agentMsTreatment": [
+        22601.6,
+        43929.8,
+        24254
+      ],
+      "medianAgentRatio": 1.0697,
+      "minAgentRatio": 1.0613,
+      "maxAgentRatio": 2.024,
+      "fasterPairs": 0,
+      "costRatioKnownPairs": 3,
+      "medianCostRatio": 0.9629,
+      "tasksPassedBaseline": 3,
+      "tasksPassedTreatment": 3,
+      "sessionsBaseline": 3,
+      "sessionsTreatment": 3,
+      "jevRequests": 1,
+      "modesRequested": [
+        "score"
+      ],
+      "questionCounts": [
+        5
+      ],
+      "toolInputBytes": [
+        1804
+      ],
+      "jevLatencyMs": [
+        635.876
+      ],
+      "jevCostUsd": [
+        0.000063462
+      ],
+      "selected": 0,
+      "scored": 1,
+      "deferred": 0,
+      "uncertain": 0,
+      "clientFailures": 0,
+      "finalMatchesSelection": null,
+      "finalInTopScoreSet": 1,
+      "costStatus": "reported"
+    }
+  ],
+  "gate": {
+    "aborted": null,
+    "collectionComplete": true,
+    "sessionsRun": 12,
+    "sessionsExpected": 12,
+    "promptSessions": 12,
+    "jevRequests": 3,
+    "budget": {
+      "maxPromptSessions": 12,
+      "maxJevRequests": 32,
+      "callLimitPerSession": 5,
+      "retries": 0
+    },
+    "costStatus": "reported",
+    "knownSubtotalUsd": 0.341578,
+    "exercised": true,
+    "scoreExercised": true,
+    "qualityHolds": true,
+    "faster": false,
+    "cheaper": false,
+    "benefit": false,
+    "functionalPass": true
+  }
+}

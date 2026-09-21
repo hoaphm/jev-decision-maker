@@ -1,0 +1,78 @@
+{
+  "protocol": "jev-effective-protocol-2",
+  "phase": "stage1",
+  "frozenAt": "2026-09-21T07:11:34.819Z",
+  "hashes": {
+    "runner": "85bba380ddd14b4f4d9cdf032116275b32de1edba2d9ca9ab24ffe44c44e2d4b",
+    "cases": "682b14d5193ec2a9f8a72289f43d6204aba0a0ec185a84eb591124a07d637036",
+    "stubExtension": "bd028ad301e5cffc808b7d5f1289fb8732d839889c8ce94004e5639bf6699235",
+    "decisionMaker": "5fe32a497a76a442f772276cf13dc1892005ffd85011faf27c479a62f9f4b6c3",
+    "shippedRules": "61be58bd15ad9cf3596ac8cf4da700b29a6754058ffb5760c5adc38f4a7fdee3",
+    "metricRules": "34a6902bdfc9cb50f3502ebda5754a5c7f23d9081178aada43188a2ec1acc35b",
+    "commonPolicy": "129e2866bafdf45ba827f8ac9eaf3ecdd9b4261eee771d6d6dfb7f427190d102",
+    "shippedPolicyAppend": "0002c77dba544d7fdb5c5641d2c8afda1cad9f9ea55433987c4f4b0424b3989c",
+    "agentsMd": "e866808185cf88fc8030e8f4313f2dc289bc21374a251485c0f89a96d12a0723",
+    "dossierBriefs": {
+      "cache-isolation": "3c9ccb82e780a93e0a2b37f51a11291b55dd3cd876d75a854672da7504b5087a",
+      "retry-amplification": "f062f744509890013c35263cb6b0ae9a8d4d2cae3f00b908eed1653c5dffc5ad"
+    },
+    "dossierPrompts": {
+      "cache-isolation": "65763637d15c2e0fe4b304790994a042d077cd98dcb69935859378f8c7034d18",
+      "retry-amplification": "bea828aafafa2df738123ec3e6b6ece83990cf6873c2b3b276e0b8b61615bb79"
+    },
+    "publicChecks": {
+      "cache-isolation": "983516d2d46e511dea17d1d6b6659246bbcaa8a7d34699979aaf97130fa11cf6",
+      "retry-amplification": "97092503b9c902ab0a328f12bf2a8698e2c82502bb62906ba5adf28eb487ed9b"
+    },
+    "privateGraders": {
+      "cache-isolation": "8034bff9c469b9b8192afde14ef0bf1d26d0f12e7747b5a5e62873b8744ef253",
+      "retry-amplification": "cf5a4ee98bc04ff69d2d866e718f1918e45c5ae314a173eb2c2bc31c9d52caed"
+    },
+    "order": "ad11defe272c963deb937b2e932ee6652bcb1972de5024972fbd25c2a5b7b7ea"
+  },
+  "caseIds": [
+    "F1:cache-key",
+    "F2:tuple",
+    "F3:cross-tenant",
+    "F4:backoff",
+    "F5:backoff-jitter",
+    "F6:spacing",
+    "F7:loop-guard",
+    "F8:null-check",
+    "F9:falsy-cursor",
+    "F10:ddl",
+    "F11:if-not-exists",
+    "F12:apply-twice",
+    "F13:resolution-order",
+    "F14:deny-wins",
+    "F15:deny-vs-grant",
+    "F16:window-computation",
+    "F17:sliding",
+    "F18:boundary-burst",
+    "F19:consumer-store",
+    "F20:record-ids",
+    "F21:deliver-twice",
+    "F22:day-boundary",
+    "F23:local-bounds",
+    "F24:plus14-edge",
+    "F25:merge-order",
+    "F26:env-last",
+    "F27:both-set",
+    "F28:index-update",
+    "F29:same-unit",
+    "F30:update-then-search"
+  ],
+  "permutedForks": [
+    "F1",
+    "F2",
+    "F3",
+    "F4",
+    "F5",
+    "F6",
+    "F13",
+    "F16",
+    "F22",
+    "F28"
+  ],
+  "mainModel": "9router/cx/gpt-5.6-terra:high"
+}

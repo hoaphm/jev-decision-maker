@@ -43,9 +43,10 @@ const COMMON_POLICY = `Work only on the current task in this workspace.
 - Verify with \`bun ${PUBLIC_TEST}\` (that exact command is pre-approved; other shell commands may be refused).
 - No git, no dependency installs, no network beyond the tools you are given.
 - If a \`decision_maker\` tool is available and you face a real fork between two or more distinct next
-  steps, supply 2-5 short candidates with the evidence you already have, then carry out the selected
-  candidate with your normal tools, or keep going on your own when it returns \`main\`.
-  Never invent options just to call it, and never call it for a step that is obvious or required.
+  steps, call it with \`mode: "select"\` and supply 2-5 short candidates with the evidence you already
+  have, then carry out the selected candidate with your normal tools, or keep going on your own when it
+  returns \`main\`. Never invent options just to call it, and never call it for a step that is obvious or
+  required. This benchmark measures step selection only: never use \`mode: "score"\`.
 `;
 
 const OVERLAY = `tools:

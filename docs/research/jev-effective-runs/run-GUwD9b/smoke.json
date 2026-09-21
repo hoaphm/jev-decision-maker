@@ -1,0 +1,28 @@
+{
+  "passed": false,
+  "reason": "the slash command did not answer without an agent turn",
+  "agentTurns": false,
+  "ackWithoutAgentTurn": false,
+  "select": {
+    "requests": 1,
+    "requestBytes": 1571,
+    "questionCount": 1,
+    "status": "selected",
+    "reason": "selected",
+    "candidateId": "cache-identity",
+    "model": "typesafe/jev-1.13-20260917",
+    "latencyMs": 1071.267,
+    "costUsd": 0.000025998
+  },
+  "score": {
+    "requests": 0,
+    "requestBytes": 0,
+    "questionCount": 0,
+    "status": "main",
+    "reason": "invalid_input",
+    "model": null,
+    "latencyMs": 0.025,
+    "costUsd": null,
+    "scoredIds": null
+  }
+}
