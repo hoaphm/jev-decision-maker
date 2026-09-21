@@ -69,6 +69,58 @@ await test("local enable never changes files when the target env file is tracked
 
 Add a repeat-enable assertion that the exact ignore pattern occurs once. Keep the existing global-switch mode `0600` assertion. Replace the credential-status test with an injected `credentialPresent: async () => true` and assert neither the report nor its lines contain a key value. Assert `/setup-jev key` returns the normal unknown-argument error and creates no agent `.env` credential file.
 
+Add one real-Git test, because a stub cannot catch a pathspec resolved against the wrong directory. The repository is created at `project/` while the session launches from `project/nested`, and every Git child process inherits the launch directory as its cwd:
+
+```ts
+await test("local enable writes the ignore rule when omp starts in a subdirectory", async () => {
+	const root = tempRoot();
+	try {
+		const project = join(root, "project");
+		const cwd = join(project, "nested");
+		mkdirSync(cwd, { recursive: true });
+		const gitIn = (inCwd: string) => async (args: string[]) => {
+			const proc = Bun.spawn(["git", ...args], { cwd: inCwd, stdout: "pipe", stderr: "pipe" });
+			const [stdout, stderr, code] = await Promise.all([
+				new Response(proc.stdout).text(),
+				new Response(proc.stderr).text(),
+				proc.exited,
+			]);
+			return { code, stdout, stderr };
+		};
+		const init = await gitIn(project)(["init", "--quiet", "."]);
+		assert.equal(init.code, 0, `git init failed: ${init.stderr}`);
+
+		// Only `nested` is a real directory, so a pathspec resolved against the launch directory would
+		// miss the tracked file and the ignore rule, which is exactly the bug this test exists for.
+		const exec = (_file: string, args: string[]) => gitIn(cwd)(args);
+		const report = await runSetupCommand("enable", { cwd, env: { HOME: root }, exec });
+		assert.equal(report.level, "info", report.lines.join("\n"));
+		assert.equal(parseEnvFile(readFileSync(join(cwd, ".env"), "utf8")).get("JEV_DECISION_MAKER"), "1");
+		assert.equal(readFileSync(join(project, ".gitignore"), "utf8").trim(), "/nested/.env");
+
+		const second = await runSetupCommand("enable", { cwd, env: { HOME: root }, exec });
+		assert.equal(second.level, "info", second.lines.join("\n"));
+		assert.equal(
+			readFileSync(join(project, ".gitignore"), "utf8").split("\n").filter((line) => line === "/nested/.env").length,
+			1,
+			"a second enable duplicated the ignore rule",
+		);
+
+		// An already staged .env must be refused with no worktree mutation at all.
+		writeFileSync(join(project, ".gitignore"), "");
+		const staged = await gitIn(project)(["add", "-f", "nested/.env"]);
+		assert.equal(staged.code, 0, `git add failed: ${staged.stderr}`);
+		const refused = await runSetupCommand("enable", { cwd, env: { HOME: root }, exec });
+		assert.equal(refused.level, "error", refused.lines.join("\n"));
+		assert.ok(refused.lines.join("\n").includes("already tracked"), refused.lines.join("\n"));
+		assert.equal(readFileSync(join(project, ".gitignore"), "utf8"), "", "a refusal rewrote .gitignore");
+		assert.equal(parseEnvFile(readFileSync(join(cwd, ".env"), "utf8")).has("JEV_DECISION_MAKER"), false);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+```
+
 - [ ] **Step 2: Run the focused regression before implementation**
 
 Run: `bun tests/setup-command.test.ts`
@@ -79,28 +131,33 @@ Expected: FAIL because local enable still refuses an unignored worktree and `key
 
 Delete `CREDENTIAL_KEY`, `storeCredential()`, and the credential write paths. Keep `agentEnvPath()` only for explicit global switches. Add an async project preparation helper with this order:
 
+`pi.exec` runs Git in the session launch directory, so root-relative pathspecs must be resolved against the worktree root. Keep the first probe on `ctx.cwd` and run every later Git call with `-C <root>`:
+
 ```ts
 async function prepareProjectEnvFile(ctx: SetupContext, path: string): Promise<string | null> {
 	const worktree = await ctx.exec("git", ["rev-parse", "--show-toplevel"]);
 	if (worktree.code !== 0) return null;
 	const root = worktree.stdout.trim();
+	if (root.length === 0) return `refusing to write ${path}: Git reported no worktree root.`;
 	const target = relative(root, path).replaceAll("\\", "/");
 	if (!target || target.startsWith("../")) return `refusing to write ${path}: it is outside the Git worktree.`;
-	const tracked = await ctx.exec("git", ["ls-files", "--error-unmatch", "--", target]);
+	// Every pathspec below is root-relative, so Git must run with -C root rather than the launch directory.
+	const at = ["-C", root];
+	const tracked = await ctx.exec("git", [...at, "ls-files", "--error-unmatch", "--", target]);
 	if (tracked.code === 0) {
 		return `refusing to write ${path}: it is already tracked by Git; remove it from the index before enabling locally.`;
 	}
 	if (tracked.code !== 1) return `refusing to write ${path}: Git could not determine whether it is tracked.`;
-	const initiallyIgnored = await ctx.exec("git", ["check-ignore", "--quiet", "--", target]);
-	if (initiallyIgnored.code === 0) return null;
-	if (initiallyIgnored.code !== 1) return `refusing to write ${path}: Git could not determine whether it is ignored.`;
+	const ignored = await ctx.exec("git", [...at, "check-ignore", "--quiet", "--", target]);
+	if (ignored.code === 0) return null;
+	if (ignored.code !== 1) return `refusing to write ${path}: Git could not determine whether it is ignored.`;
 	const pattern = `/${target}`;
 	const ignorePath = join(root, ".gitignore");
 	const current = readEnvFile(ignorePath);
 	if (!current.split("\n").some((line) => line.trim() === pattern)) {
 		writeFileSync(ignorePath, `${current.replace(/\n*$/, "\n")}${pattern}\n`);
 	}
-	const verified = await ctx.exec("git", ["check-ignore", "--quiet", "--", target]);
+	const verified = await ctx.exec("git", [...at, "check-ignore", "--quiet", "--", target]);
 	if (verified.code === 0) return null;
 	return verified.code === 1
 		? `refusing to write ${path}: Git does not ignore it after updating ${ignorePath}.`
