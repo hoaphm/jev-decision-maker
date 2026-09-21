@@ -1,252 +1,254 @@
-# JEV Decision Maker Plugin Implementation Plan
+# OMP Credential and Project Activation Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make the JEV Decision Maker a Git-installable OMP plugin and correct the quota/evidence defects without new inference.
+**Goal:** Make project-local activation safely prepare its Git ignore rule and make the decision maker resolve OpenRouter credentials from OMP at runtime.
 
-**Architecture:** A root OMP package manifest names `src/decision-maker.ts` as the extension entrypoint. The package ships a conventional `rules/` runtime policy and uses OMP’s plugin manager for link/Git installation. The JSONL transcripts stay immutable and hash-pinned; the report and results JSON are intentionally annotated as invalid for acceptance, and a correction section supersedes their acceptance claims.
+**Architecture:** `src/setup-command.ts` owns activation only: unflagged commands maintain a launch-directory switch and explicit `--global` commands retain the agent-wide switch. `src/decision-maker.ts` owns credential resolution: status uses OMP's cheap presence probe, while execution resolves the credential once through OMP and injects it into the existing HTTP boundary. No plugin path reads or writes `OPENROUTER_API_KEY` directly.
 
-**Tech Stack:** Bun 1.4.2, TypeScript, OMP 18.2.6 extension/plugin APIs, Node `assert/strict`, OMP RPC mode.
-
-**Spec:** `.scratch/jev-decision-maker-plugin/spec.md` (repo convention: `docs/agents/issue-tracker.md`)
+**Tech Stack:** Bun, TypeScript, Node `assert/strict`, OMP extension APIs, Git.
 
 ## Global Constraints
 
-- Do not call OpenRouter, any model, or any inference endpoint.
-- Do not call `omp token`, read OMP credential stores, publish a package, create a remote, commit, or alter real user/project plugin state.
-- OMP plugin manifest: `package.json#omp.extensions` must point to `./src/decision-maker.ts`.
-- Budget resets only for `start`, `switch`, `branch`, and `tree`; cap remains five calls per session.
-- Preserve existing `docs/research/jev-decision-maker-results.json`, `docs/research/jev-decision-maker.md`, and `docs/research/jev-runs/` byte-for-byte as historical artifacts.
-- Test only with `bun tests/decision-maker.test.ts`, `bun scripts/benchmark-decision-maker.ts --self-check`, and the isolated plugin-link/RPC test.
-- Do not install dependencies.
+- Do not call OpenRouter, a model, or any inference endpoint during tests.
+- Add no dependencies.
+- `JEV_DECISION_MAKER=1` remains the sole registration switch.
+- Resolve credentials from `ctx.modelRegistry` for provider `openrouter`; never fall back to `process.env.OPENROUTER_API_KEY` in plugin code.
+- Use `authStorage.peekApiKey("openrouter")` for status; full resolution occurs only during tool execution.
+- If the resolver capability or credential is unavailable, return `main/missing_key` without a request.
+- Preserve explicit `enable --global` and `disable --global` behavior.
+- For local enable, refuse a tracked `.env` before changing `.gitignore` or `.env`; append no duplicate ignore pattern.
+- Historical inference artifacts remain invalid for acceptance and are not reclassified.
+- Update `README.md` and `AGENTS.md` in the same implementation commit as the changed behavior.
 
 ---
 
-### Task 1: Establish package and lifecycle regression tests
+### Task 1: Make local activation Git-safe and credential-free
 
 **Files:**
-- Modify: `tests/decision-maker.test.ts`
-- Create: `tests/plugin-install.test.ts`
+- Modify: `src/setup-command.ts:1-200`
+- Modify: `tests/setup-command.test.ts:1-217`
 
 **Interfaces:**
-- Consumes: current exported `decide`, `CALL_LIMIT`, `DEFER_ID`, candidate types.
-- Produces: a failing import of `BUDGET_RESET_REASONS` from `../src/decision-maker.ts`; an isolated OMP plugin-link test that requires a root `package.json` with an `omp.extensions` entry.
+- Consumes: `SetupContext.exec`, which runs Git as `Exec(file, args)` and returns `{ code, stdout, stderr }`.
+- Produces: `runSetupCommand(args, ctx)` with `enable`, `disable`, `enable --global`, and `disable --global`; `key` is no longer a supported subcommand.
+- Produces: `SetupContext.credentialPresent?: () => Promise<boolean>` for the command status report; callers omit it only in unit tests that assert a missing credential.
 
-- [ ] **Step 1: Point the existing guard test at the desired package entrypoint and state the lifecycle contract**
+- [ ] **Step 1: Write the failing setup-command regressions**
+
+Replace the `key` storage tests with these observable contracts:
 
 ```ts
-import {
-  BUDGET_RESET_REASONS,
-  CALL_LIMIT,
-  DEFER_ID,
-  decide,
-  type Candidate,
-  type DecisionInput,
-} from "../src/decision-maker.ts";
+await test("local enable ignores an untracked target once before writing the switch", async () => {
+	const root = tempRoot();
+	try {
+		const cwd = join(root, "project", "nested");
+		mkdirSync(cwd, { recursive: true });
+		// Use an Exec stub that reports a worktree root, untracked target, initially-unignored target,
+		// then ignored after the test observes `/.env` or `/nested/.env` in root/.gitignore.
+		const report = await runSetupCommand("enable", { cwd, env: { HOME: root }, exec: gitFor(root, cwd) });
+		assert.equal(report.level, "info");
+		assert.equal(parseEnvFile(readFileSync(join(cwd, ".env"), "utf8")).get("JEV_DECISION_MAKER"), "1");
+		assert.equal(readFileSync(join(root, "project", ".gitignore"), "utf8").split("\n").filter((line) => line === "/nested/.env").length, 1);
+	} finally { rmSync(root, { recursive: true, force: true }); }
+});
 
-await test("only lifecycle boundaries reset the session budget", async () => {
-  assert.deepEqual(BUDGET_RESET_REASONS, ["start", "switch", "branch", "tree"]);
+await test("local enable never changes files when the target env file is tracked", async () => {
+	const root = tempRoot();
+	try {
+		const cwd = join(root, "project");
+		mkdirSync(cwd, { recursive: true });
+		writeFileSync(join(cwd, ".gitignore"), "# existing\n");
+		const report = await runSetupCommand("enable", { cwd, env: { HOME: root }, exec: gitTrackedStub() });
+		assert.equal(report.level, "error");
+		assert.equal(existsSync(join(cwd, ".env")), false);
+		assert.equal(readFileSync(join(cwd, ".gitignore"), "utf8"), "# existing\n");
+	} finally { rmSync(root, { recursive: true, force: true }); }
 });
 ```
 
-- [ ] **Step 2: Write the isolated plugin-link integration test**
+Add a repeat-enable assertion that the exact ignore pattern occurs once. Keep the existing global-switch mode `0600` assertion. Replace the credential-status test with an injected `credentialPresent: async () => true` and assert neither the report nor its lines contain a key value. Assert `/setup-jev key` returns the normal unknown-argument error and creates no agent `.env` credential file.
 
-The test creates one `mkdtemp` root, gives OMP only temporary `XDG_DATA_HOME`, `XDG_STATE_HOME`, and `XDG_CACHE_HOME`, then runs:
+- [ ] **Step 2: Run the focused regression before implementation**
+
+Run: `bun tests/setup-command.test.ts`
+
+Expected: FAIL because local enable still refuses an unignored worktree and `key` still stores a credential.
+
+- [ ] **Step 3: Implement the minimal activation flow**
+
+Delete `CREDENTIAL_KEY`, `storeCredential()`, and the credential write paths. Keep `agentEnvPath()` only for explicit global switches. Add an async project preparation helper with this order:
 
 ```ts
-const link = await run(["omp", "plugin", "link", repo], tempDir, env);
-assert.equal(link.code, 0, link.stderr);
-
-const rpc = await runRpcGetState(tempWorkspace, env);
-assert.equal(rpc.frames.some(frame => frame.type === "agent_start"), false);
-assert.ok(
-  rpc.state.data.dumpTools.some((tool: { name: string }) => tool.name === "decision_maker"),
-);
-```
-
-`runRpcGetState` supplies exactly one JSONL `get_state` command to `omp --mode rpc --no-session --no-title --no-skills --no-rules`; it must not send a prompt. `finally` removes the full temporary root.
-
-- [ ] **Step 3: Run the two tests and confirm red**
-
-Run:
-
-```text
-bun tests/decision-maker.test.ts
-bun tests/plugin-install.test.ts
-```
-
-Expected: the first fails because `../src/decision-maker.ts` does not exist; the second fails because the repository has no `package.json` plugin manifest. Neither process may emit `agent_start` or an inference request.
-
-### Task 2: Package the extension and fix quota reset behavior
-
-**Files:**
-- Create: `package.json`
-- Create: `src/decision-maker.ts` by moving `.omp/extensions/decision-maker.ts`
-- Create: `rules/decision-maker.md`
-- Create: `README.md`
-- Remove: `.omp/extensions/decision-maker.ts`
-- Modify: `AGENTS.md`
-- Modify: `CONTEXT.md`
-- Modify: `scripts/benchmark-decision-maker.ts`
-
-**Interfaces:**
-- Consumes: `BUDGET_RESET_REASONS` from Task 1 and OMP’s plugin manifest loader.
-- Produces: installable package `jev-decision-maker`; extension path `src/decision-maker.ts`; runtime rule `rules/decision-maker.md`.
-
-- [ ] **Step 1: Add the minimal manifest**
-
-```json
-{
-  "name": "jev-decision-maker",
-  "version": "0.1.0",
-  "private": true,
-  "type": "module",
-  "omp": {
-    "extensions": ["./src/decision-maker.ts"]
-  }
+async function prepareProjectEnvFile(ctx: SetupContext, path: string): Promise<string | null> {
+	const worktree = await ctx.exec("git", ["rev-parse", "--show-toplevel"]);
+	if (worktree.code !== 0) return null;
+	const root = worktree.stdout.trim();
+	const target = relative(root, path).replaceAll("\\", "/");
+	if (!target || target.startsWith("../")) return `refusing to write ${path}: it is outside the Git worktree.`;
+	const tracked = await ctx.exec("git", ["ls-files", "--error-unmatch", "--", target]);
+	if (tracked.code === 0) {
+		return `refusing to write ${path}: it is already tracked by Git; remove it from the index before enabling locally.`;
+	}
+	if (tracked.code !== 1) return `refusing to write ${path}: Git could not determine whether it is tracked.`;
+	const initiallyIgnored = await ctx.exec("git", ["check-ignore", "--quiet", "--", target]);
+	if (initiallyIgnored.code === 0) return null;
+	if (initiallyIgnored.code !== 1) return `refusing to write ${path}: Git could not determine whether it is ignored.`;
+	const pattern = `/${target}`;
+	const ignorePath = join(root, ".gitignore");
+	const current = readEnvFile(ignorePath);
+	if (!current.split("\n").some((line) => line.trim() === pattern)) {
+		writeFileSync(ignorePath, `${current.replace(/\n*$/, "\n")}${pattern}\n`);
+	}
+	const verified = await ctx.exec("git", ["check-ignore", "--quiet", "--", target]);
+	if (verified.code === 0) return null;
+	return verified.code === 1
+		? `refusing to write ${path}: Git does not ignore it after updating ${ignorePath}.`
+		: `refusing to write ${path}: Git could not verify the ignore rule.`;
 }
 ```
 
-No scripts, dependencies, package manager lockfile, marketplace metadata, or publish configuration.
+Use this helper only from unflagged `enable` before `writeEnvFile`. Do not call it from `disable`: disabling only removes the switch and never removes a user-visible ignore rule. Make `status()` await `credentialPresent?.()` and report only `credential: configured` or `credential: missing`; remove all environment and agent-file credential reads. Change usage to `/setup-jev [enable|disable] [--global]`.
 
-- [ ] **Step 2: Move the extension and constrain reset events**
+- [ ] **Step 4: Run the focused regression after implementation**
 
-Move the complete module to `src/decision-maker.ts`. Near `CALL_LIMIT`, add and export:
+Run: `bun tests/setup-command.test.ts`
+
+Expected: PASS. Local enable writes exactly one root-relative ignore pattern only after proving the target is untracked; global enable and disable still use the agent env file.
+
+- [ ] **Step 5: Commit the setup-command change**
+
+```bash
+git add src/setup-command.ts tests/setup-command.test.ts
+git commit -m "fix: prepare ignored project activation"
+```
+
+### Task 2: Resolve credentials through the OMP extension context
+
+**Files:**
+- Modify: `src/decision-maker.ts:1-457`
+- Modify: `tests/decision-maker.test.ts:1-548`
+
+**Interfaces:**
+- Consumes: `ExtensionContext.modelRegistry.getApiKeyForProvider("openrouter", sessionId, { signal })` during tool execution.
+- Consumes: `ExtensionContext.modelRegistry.authStorage.peekApiKey("openrouter")` for lifecycle status and setup-command status.
+- Produces: `DecideOptions.resolveApiKey?: () => Promise<string | undefined>`; omitted or blank results return `main/missing_key` before fetch.
+- Produces: tool execution that passes the context resolver to `decide()` and never reads `process.env.OPENROUTER_API_KEY`.
+
+- [ ] **Step 1: Write failing decision-maker tests**
+
+Replace process-environment setup with an injected resolver:
 
 ```ts
-export const BUDGET_RESET_REASONS = ["start", "switch", "branch", "tree"] as const;
+const resolveKey = async (): Promise<string | undefined> => KEY;
+const result = await decide(input(), { fetch: impl, resolveApiKey: resolveKey });
+assert.equal((calls[0].init.headers as Record<string, string>).authorization, `Bearer ${KEY}`);
+
+const missing = await decide(input(), { fetch: impl, resolveApiKey: async () => undefined });
+assert.equal(missing.reason, "missing_key");
+assert.equal(calls.length, 0);
 ```
 
-Replace the broad lifecycle branch with:
+Make the registration stub supply a context with both methods. Add a status test where `peekApiKey()` returns `KEY` and `getApiKeyForProvider()` throws; lifecycle status must still write `◆ JEV on`, proving status never runs the full resolver. Add a tool execution test where the full resolver is called once, the injected fetch receives the bearer key, and status refreshes from `peekApiKey()` afterward.
+
+- [ ] **Step 2: Run the focused decision boundary test before implementation**
+
+Run: `bun tests/decision-maker.test.ts`
+
+Expected: FAIL because `decide()` still reads `process.env.OPENROUTER_API_KEY` and lifecycle status synchronously reads the same variable.
+
+- [ ] **Step 3: Implement context-owned credential resolution**
+
+Change `DecideOptions` and the credential guard to:
 
 ```ts
-if (BUDGET_RESET_REASONS.includes(reason as (typeof BUDGET_RESET_REASONS)[number])) {
-  budget.remaining = CALL_LIMIT;
-}
+export type DecideOptions = {
+	signal?: AbortSignal;
+	fetch?: typeof globalThis.fetch;
+	budget?: { remaining: number };
+	resolveApiKey?: () => Promise<string | undefined>;
+};
+
+const apiKey = await options.resolveApiKey?.();
+if (!apiKey?.trim()) return failure("missing_key", started);
 ```
 
-Do not change HTTP behavior, thresholds, API key lookup, request schema, or call-limit decrement behavior.
+Import OMP's `ExtensionContext` as a type and replace the narrow status context with the required `ui`, `modelRegistry`, and `sessionManager` capabilities. Make `refreshStatus` async and derive `hasKey` exclusively from `ctx.modelRegistry.authStorage.peekApiKey("openrouter")`; treat throws as absent. On lifecycle hooks, `await refreshStatus(ctx)`. In `execute`, create a resolver that calls `ctx.modelRegistry.getApiKeyForProvider("openrouter", ctx.sessionManager.getSessionId?.(), { signal })`, pass it to `decide`, and await the subsequent status refresh. Pass the same cheap presence callback into `runSetupCommand` for slash-command status.
 
-- [ ] **Step 3: Add the package runtime rule and source documentation**
+Keep `JEV_DECISION_MAKER` as the process-environment registration switch. Do not change endpoint, model, timeout, request body, response validation, quotas, or thresholds.
 
-`rules/decision-maker.md` defines the activation boundary: genuine coding/debug branch point; 2–5 evidence-backed candidates; selected is not authorization; `main` returns reasoning to the main agent; no fake branch points or obvious steps.
+- [ ] **Step 4: Run the focused decision boundary test after implementation**
 
-Replace the detailed `AGENTS.md` Decision maker section with one pointer to `rules/decision-maker.md`, avoiding two divergent policies. Update `CONTEXT.md` to name `src/decision-maker.ts` as the implementation path.
+Run: `bun tests/decision-maker.test.ts`
 
-`README.md` documents:
+Expected: PASS. All HTTP boundary tests provide a resolver; missing and unavailable resolver paths make zero fetch calls; status never invokes full key resolution.
 
-```text
-omp plugin link /absolute/path/to/JEV-omp
-omp plugin install github:OWNER/JEV-omp#main
+- [ ] **Step 5: Commit the resolver cutover**
+
+```bash
+git add src/decision-maker.ts tests/decision-maker.test.ts
+git commit -m "feat: resolve decision credentials through omp"
 ```
 
-It requires OMP 18.2.6+, Bun 1.4.2+, `JEV_DECISION_MAKER=1`, and an already-exported `OPENROUTER_API_KEY`; it never suggests secret-store commands. It warns that `JEV_DECISION_MAKER=1 omp` in an unlinked source checkout does not discover `src/` automatically; use plugin link or `-e /absolute/path/to/src/decision-maker.ts`.
+### Task 3: Update isolated integration proof and operator documentation
 
-- [ ] **Step 4: Update the executable benchmark source path only**
+**Files:**
+- Modify: `tests/plugin-install.test.ts:53-420`
+- Modify: `README.md:50-148`
+- Modify: `AGENTS.md:17-27`
 
-Change:
+**Interfaces:**
+- Consumes: the project-local activation contract from Task 1 and context credential resolution from Task 2.
+- Produces: an offline isolated-HOME proof of OMP env-backed credential resolution and operator instructions that name OMP, not plugin-owned credentials.
 
-```ts
-const EXTENSION = join(REPO, ".omp", "extensions", "decision-maker.ts");
+- [ ] **Step 1: Write failing integration and documentation assertions**
+
+In `tests/plugin-install.test.ts`, remove the `/setup-jev key` command and agent credential-file assertions. Keep the isolated environment's placeholder `OPENROUTER_API_KEY`; it is resolved by OMP, not the plugin. Assert that `/setup-jev enable --global` still writes only `JEV_DECISION_MAKER=1` to the agent env file, and that local enable writes its project switch without starting an agent turn. Update README assertions so they require `JEV_DECISION_MAKER`, `OMP-managed` or `OMP configuration`, `enable --global`, and the status labels; they must not require `/setup-jev key`.
+
+- [ ] **Step 2: Run the integration proof before documentation changes**
+
+Run: `bun tests/plugin-install.test.ts`
+
+Expected: FAIL because the test still invokes the removed `key` command and README still states that both variables must be exported directly for registration.
+
+- [ ] **Step 3: Update docs and integration behavior**
+
+In `README.md`:
+
+```md
+/setup-jev enable              # records a project-local switch; creates the exact Git ignore rule when needed
+/setup-jev enable --global     # records an explicit machine-wide switch
+/setup-jev disable [--global]
 ```
 
-to:
+State that `JEV_DECISION_MAKER=1` controls tool registration, while OMP resolves OpenRouter credentials from its configured provider sources. State that `◆ JEV no key` means OMP reports no credential through the cheap presence check. Remove every `/setup-jev key` instruction and every claim that the plugin reads a key from process environment at call time. Retain the benchmark's separate environment requirement only where the benchmark script itself consumes it.
 
-```ts
-const EXTENSION = join(REPO, "src", "decision-maker.ts");
-```
+In `AGENTS.md`, replace the two-variable launch requirement with: the plugin registers with `JEV_DECISION_MAKER=1`; calls require an OpenRouter credential configured for OMP; missing configuration returns `main/missing_key` without a request.
 
-Do not edit paths inside `docs/research/`; they describe the historical run.
+Keep `rules/decision-maker.md` unchanged because it contains tool-usage authorization policy, not credential configuration.
 
-- [ ] **Step 5: Run green checks**
+- [ ] **Step 4: Run integration and offline regression checks**
 
 Run:
 
-```text
+```bash
+bun tests/setup-command.test.ts
 bun tests/decision-maker.test.ts
 bun tests/plugin-install.test.ts
-```
-
-Expected: all guard checks pass; OMP links only in temporary XDG state; `get_state` lists `decision_maker`; no `agent_start` frame exists.
-
-### Task 3: Correct the benchmark evidence and pin the immutable transcripts
-
-**Files:**
-- Create: `docs/research/jev-decision-maker-correction.md`
-
-**Interfaces:**
-- Consumes: historical raw artifacts under `docs/research/` and the approved credential constraint.
-- Produces: the authoritative correction for acceptance/readers.
-
-- [ ] **Step 1: Add the correction record**
-
-State all of the following explicitly:
-
-- The 12-session live batch and one live endpoint probe are invalid for acceptance because the credential was retrieved through an OMP secret-store command, not provided as `OPENROUTER_API_KEY` by the user.
-- The 12 JSONL transcripts are the immutable evidence set: untouched since the run and hash-pinned in
-  `docs/research/jev-decision-maker-evidence.sha256`.
-- `docs/research/jev-decision-maker.md` and `jev-decision-maker-results.json` are **deliberately
-  annotated** (correction section; three added top-level keys) and are therefore *not* byte-stable.
-- Live proof is missing; only local guard tests, fixture self-check, and no-inference plugin discovery are accepted after this correction.
-- Remove authority from the original “average six tool calls” claim: the runner did not record total tool calls for the batch, so no average is asserted.
-- No conclusion about speed, task quality under JEV, model cost, endpoint latency, or JEV selection is accepted from the invalid batch.
-
-- [ ] **Step 2: Verify which artifacts are immutable and which are annotated**
-
-Write the transcript manifest, verify it, and record the annotation delta:
-
-```sh
-cd docs/research && sha256sum jev-runs/*.jsonl > jev-decision-maker-evidence.sha256
-sha256sum -c jev-decision-maker-evidence.sha256        # 12/12 OK
-stat -c '%y %n' jev-runs/*.jsonl                        # all mtimes inside the run window
-```
-
-Expected: the 12 transcripts verify OK and predate the correction edits. The report and the results JSON
-are expected to differ from their pre-correction state - that is the point of Task 3 - so they must be
-described as annotated, never as unchanged. For the JSON, prove content equality by parsing, dropping
-`validity`/`validityReason`/`credentialSource`, and comparing against the pre-edit parse.
-
-### Task 4: Run final local verification
-
-**Files:**
-- Verify: `tests/decision-maker.test.ts`
-- Verify: `tests/plugin-install.test.ts`
-- Verify: `scripts/benchmark-decision-maker.ts`
-
-**Interfaces:**
-- Consumes: packaged manifest/source/rule and correction from Tasks 1–3.
-- Produces: reproducible local evidence without inference or real plugin state mutation.
-
-- [ ] **Step 1: Run guard tests**
-
-Run:
-
-```text
-bun tests/decision-maker.test.ts
-```
-
-Expected: every existing guard plus the exact reset-reasons assertion passes.
-
-- [ ] **Step 2: Run fixture self-check**
-
-Run:
-
-```text
 bun scripts/benchmark-decision-maker.ts --self-check
 ```
 
-Expected: each seeded fixture fails both checks; each oracle passes both; no OMP/inference is launched.
+Expected: all commands pass offline; no agent turn or inference request occurs in the plugin-install proof.
 
-- [ ] **Step 3: Run isolated package integration**
+- [ ] **Step 5: Commit integration proof and documentation**
 
-Run:
-
-```text
-bun tests/plugin-install.test.ts
+```bash
+git add tests/plugin-install.test.ts README.md AGENTS.md
+git commit -m "docs: describe omp-managed decision credentials"
 ```
 
-Expected: temporary XDG plugin link succeeds; RPC `get_state` lists `decision_maker`; no `agent_start`; temporary directory removed.
+## Plan Self-Review
 
-- [ ] **Step 4: Scope review**
-
-Confirm the only implementation additions/changes are the manifest, moved source, runtime rule, README, tests, source-path update, AGENTS/CONTEXT pointers, correction section, transcript hash manifest, and planning docs under `.scratch/`. Confirm the 12 transcripts verify against `jev-decision-maker-evidence.sha256`, that the report and results JSON changed **only** by the intended annotation, that no plugin state was written outside the isolated HOME (both `~/.omp/plugins` and `$XDG_DATA_HOME/omp/plugins` fingerprinted), that no remote exists, and that no commit was made.
+- **Spec coverage:** Task 1 covers exact project-local ignore preparation, tracked-file refusal, duplicate prevention, and preserved global activation. Task 2 covers OMP-only credential resolution, cheap status probing, capability failure, and no fallback. Task 3 updates all named user-facing docs and proves the isolated integration path. Historical evidence is preserved and not reclassified.
+- **Placeholder scan:** No TBD, TODO, deferred behavior, or unspecified error handling remains.
+- **Type consistency:** `resolveApiKey` is the only `decide()` credential seam; `credentialPresent` is the only setup-command status seam; both return a key-presence result without exposing key material.
